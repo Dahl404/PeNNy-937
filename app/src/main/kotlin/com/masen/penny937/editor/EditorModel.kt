@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 data class ReferencePlacement(
     val fileName: String,
@@ -49,6 +50,13 @@ data class ReferencePlacement(
 }
 
 data class EditorHint(val id: Int, val text: String)
+
+data class EyedropperState(
+    val frameIndex: Int,
+    val layerId: Long,
+    val layerName: String,
+    val originalColor: Int
+)
 
 data class VideoImportState(
     val done: Int,
@@ -101,6 +109,8 @@ class EditorModel(
     var placement by mutableStateOf<ReferencePlacement?>(null)
         private set
     var importingReference by mutableStateOf(false)
+        private set
+    var eyedropper by mutableStateOf<EyedropperState?>(null)
         private set
     var hint by mutableStateOf<EditorHint?>(null)
         private set
@@ -159,6 +169,7 @@ class EditorModel(
             h = h * 31 + (if (isPlaying) 1 else 0)
             h = h * 31 + previewFrame
             h = h * 31 + (placement?.hashCode() ?: 0)
+            h = h * 31 + (if (eyedropper != null) 1 else 0)
             return h
         }
 
@@ -300,6 +311,7 @@ class EditorModel(
 
     fun importReference(uri: Uri) {
         if (placement != null || importingReference || videoImport != null) return
+        if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
         if (isPlaying) stopPlayback()
         val targetFrame = currentFrame
@@ -342,6 +354,7 @@ class EditorModel(
 
     fun beginReposition(layer: Layer) {
         if (videoImport != null) return
+        if (eyedropper != null) cancelEyedropper()
         val image = layer.image ?: return
         cancelActiveInk()
         if (isPlaying) stopPlayback()
@@ -421,6 +434,7 @@ class EditorModel(
 
     fun importVideoReference(uri: Uri) {
         if (placement != null || importingReference || videoImport != null) return
+        if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
         if (isPlaying) stopPlayback()
         val start = lastVideoStart?.let { previousStart ->
@@ -541,6 +555,73 @@ class EditorModel(
         prefs.lastColor = value
     }
 
+    /** Eyedropper: live sampler for the currently selected layer only. */
+    private var eyedropperFound = false
+
+    fun beginEyedropper(): Boolean {
+        if (eyedropper != null) return true
+        if (placement != null || importingReference || videoImport != null) return false
+        if (isPlaying) stopPlayback()
+        cancelActiveInk()
+        val target = layer
+        hint = null
+        eyedropper = EyedropperState(
+            frameIndex = currentFrame,
+            layerId = target.id,
+            layerName = target.name,
+            originalColor = color
+        )
+        eyedropperFound = false
+        return true
+    }
+
+    fun sampleEyedropper(x: Float, y: Float, radius: Float): Boolean {
+        val state = eyedropper ?: return false
+        val frame = project.frameAt(state.frameIndex)
+        val target = frame.layers.firstOrNull { it.id == state.layerId } ?: return false
+        val bitmap = renderer.editableLayerBitmap(project, target)
+        if (bitmap.width <= 0 || bitmap.height <= 0) return false
+        val cx = x.roundToInt().coerceIn(0, bitmap.width - 1)
+        val cy = y.roundToInt().coerceIn(0, bitmap.height - 1)
+        val r = radius.roundToInt().coerceIn(0, 64)
+        val left = (cx - r).coerceAtLeast(0)
+        val top = (cy - r).coerceAtLeast(0)
+        val right = (cx + r).coerceAtMost(bitmap.width - 1)
+        val bottom = (cy + r).coerceAtMost(bitmap.height - 1)
+        val w = right - left + 1
+        val h = bottom - top + 1
+        val pixels = IntArray(w * h)
+        bitmap.getPixels(pixels, 0, w, left, top, w, h)
+        val picked = com.masen.penny937.paint.ColorSampler.nearestOpaqueColor(
+            pixels, w, h, cx - left, cy - top
+        ) ?: return false
+        color = picked
+        eyedropperFound = true
+        return true
+    }
+
+    fun finishEyedropper() {
+        val state = eyedropper ?: return
+        eyedropper = null
+        if (eyedropperFound) {
+            prefs.lastColor = color
+            showHint(
+                "Picked #${String.format("%06X", 0xFFFFFF and color)} from ${state.layerName}"
+            )
+        } else {
+            color = state.originalColor
+            showHint("Nothing to sample on ${state.layerName}")
+        }
+        eyedropperFound = false
+    }
+
+    fun cancelEyedropper() {
+        val state = eyedropper ?: return
+        color = state.originalColor
+        eyedropper = null
+        eyedropperFound = false
+    }
+
     fun changeSize(value: Float) {
         size = value.coerceIn(tool.minWidth(), tool.maxWidth())
         prefs.setSizeFor(tool, size)
@@ -589,6 +670,7 @@ class EditorModel(
     // ---------------------------------------------------------------- frames
 
     fun selectFrame(index: Int) {
+        if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
         currentFrame = index.coerceIn(0, project.frames.lastIndex)
         currentLayer = currentLayer.coerceIn(0, frame.layers.lastIndex)
@@ -596,6 +678,7 @@ class EditorModel(
     }
 
     fun selectLayer(index: Int) {
+        if (eyedropper != null) cancelEyedropper()
         currentLayer = index.coerceIn(0, frame.layers.lastIndex)
     }
 
@@ -734,6 +817,7 @@ class EditorModel(
     // ---------------------------------------------------------------- playback
 
     fun togglePlayback() {
+        if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
         if (isPlaying) {
             stopPlayback()

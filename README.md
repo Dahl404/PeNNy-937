@@ -48,6 +48,11 @@ frame actions and layers are always available.
   where you can drag, pinch-scale and rotate it, then locks as a dedicated reference
   layer on the current frame. Reference layers are guides: they are never drawn on,
   exported, played back or onion-skinned. Unlock to reposition or delete.
+- **Layer eyedropper.** Open Color and choose *Pick from Layer 1* to sample ink
+  directly from the selected layer — including a reference image. A floating loupe
+  previews the live color while you drag; lift to keep, or cancel to revert. Other
+  layers are ignored, so the picked color is the ink you actually tapped, not the
+  blended composite.
 - **Reference video.** Import a clip from Layers; it is sampled at the project frame
   rate (for example 10s at 12fps = 120 references) and each sample becomes a locked
   reference layer on its own timeline frame, extending the animation as needed.

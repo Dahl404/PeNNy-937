@@ -112,7 +112,12 @@ private fun hsvColor(h: Float, s: Float, v: Float): Int =
 private fun hexOf(color: Int): String = String.format("#%06X", 0xFFFFFF and color)
 
 @Composable
-fun BoxScope.ColorSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+fun BoxScope.ColorSheet(
+    visible: Boolean,
+    editor: EditorModel,
+    onDismiss: () -> Unit,
+    onPickFromLayer: () -> Unit
+) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val initial = remember { FloatArray(3).also { AColor.colorToHSV(editor.color, it) } }
@@ -169,6 +174,22 @@ fun BoxScope.ColorSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                     )
                 }
             }
+
+            Spacer(Modifier.height(14.dp))
+            SecondaryButton(
+                text = "Pick from ${editor.layer.name}",
+                icon = PennyIcons.Eyedropper,
+                onClick = onPickFromLayer,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Samples only the selected layer — match ink you already drew, " +
+                    "or a reference image.",
+                style = type.caption,
+                color = palette.textTertiary,
+                lineHeight = 16.sp
+            )
 
             Spacer(Modifier.height(18.dp))
             SliderBlock(label = "Hue", valueText = "${hue.roundToInt()}°") {

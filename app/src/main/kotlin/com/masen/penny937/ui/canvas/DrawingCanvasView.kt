@@ -127,6 +127,11 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var hoverY = 0f
     private var hoverErase = false
 
+    private var eyedropperActive = false
+    private var eyedropperPointerId = -1
+    private var eyedropperX = 0f
+    private var eyedropperY = 0f
+
     private var lastTapTime = 0L
     private var lastTapX = 0f
     private var lastTapY = 0f
@@ -183,6 +188,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         if (!targetStillValid) {
             cancelStroke()
         }
+        if (model.eyedropper == null) eyedropperActive = false
         invalidate()
     }
 
@@ -265,7 +271,9 @@ class DrawingCanvasView @JvmOverloads constructor(
         canvas.scale(scale, scale)
         bitmapRect.set(0f, 0f, project.width.toFloat(), project.height.toFloat())
 
-        if (editing) drawOnionSkins(canvas, model, project, frameIndex)
+        if (editing && model.eyedropper == null) {
+            drawOnionSkins(canvas, model, project, frameIndex)
+        }
 
         if (previewFrameIndex >= 0) {
             val preview = model.renderer.composite(
@@ -276,12 +284,24 @@ class DrawingCanvasView @JvmOverloads constructor(
         } else {
             val drawingOnActive = editing && inker != null
             val placingLayerId = model.placement?.targetLayerId
+            val pickingLayerId = model.eyedropper?.layerId
             for (i in frame.layers.indices) {
                 val layer = frame.layers[i]
-                if (!layer.visible || layer.opacity <= 0.003f) continue
+                val isPicked = pickingLayerId == layer.id
+                if (pickingLayerId == null) {
+                    if (!layer.visible || layer.opacity <= 0.003f) continue
+                } else if (!isPicked) {
+                    if (!layer.visible || layer.opacity <= 0.003f) continue
+                } else if (layer.opacity <= 0.003f) {
+                    continue
+                }
                 if (layer.id == placingLayerId) continue
                 val bitmap = model.renderer.editableLayerBitmap(project, layer)
-                layerPaint.alpha = (layer.opacity * 255f).toInt().coerceIn(0, 255)
+                val displayOpacity = when {
+                    pickingLayerId == null || isPicked -> layer.opacity
+                    else -> layer.opacity * 0.18f
+                }
+                layerPaint.alpha = (displayOpacity * 255f).toInt().coerceIn(0, 255)
                 canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
 
                 if (drawingOnActive && i == activeLayerIndex && strokeIsMarker) {
@@ -296,7 +316,9 @@ class DrawingCanvasView @JvmOverloads constructor(
         }
 
         if (editing) {
-            if (model.gridEnabled) drawGrid(canvas, model, project)
+            if (model.gridEnabled && model.eyedropper == null) {
+                drawGrid(canvas, model, project)
+            }
             val preview = shapePreview
             if (preview != null) Ink.renderStroke(canvas, preview)
             model.placement?.let { drawPlacement(canvas, it) }
@@ -307,7 +329,10 @@ class DrawingCanvasView @JvmOverloads constructor(
         borderPaint.color = if (darkTheme) Color.argb(40, 255, 255, 255) else Color.argb(30, 0, 0, 0)
         canvas.drawRoundRect(paperRect, radius, radius, borderPaint)
 
-        if (editing && hoverVisible && model.placement == null) drawCursor(canvas, model)
+        if (model.eyedropper != null && eyedropperActive) drawEyedropperLoupe(canvas, model)
+        if (editing && hoverVisible && model.placement == null && model.eyedropper == null) {
+            drawCursor(canvas, model)
+        }
     }
 
     private fun drawOnionSkins(canvas: Canvas, model: EditorModel, project: Project, frameIndex: Int) {
@@ -403,6 +428,10 @@ class DrawingCanvasView @JvmOverloads constructor(
             handlePlacementTouch(event, model)
             return true
         }
+        if (model.eyedropper != null) {
+            handleEyedropperTouch(event, model)
+            return true
+        }
         if (model.isPlaying || previewFrameIndex >= 0) return true
 
         when (event.actionMasked) {
@@ -417,6 +446,117 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
         }
         return true
+    }
+
+    private fun handleEyedropperTouch(event: MotionEvent, model: EditorModel) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val index = 0
+                if (isPalm(event, index)) return
+                startEyedropperPointer(event, index, model)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                if (isPalm(event, index)) return
+                val isPen = isPen(event, index)
+                // A resting palm may have arrived first; let the pen take over.
+                if (eyedropperActive && !isPen) return
+                startEyedropperPointer(event, index, model)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val index = event.findPointerIndex(eyedropperPointerId)
+                if (index >= 0) sampleEyedropperAt(event.getX(index), event.getY(index), model)
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val index = event.actionIndex
+                if (event.getPointerId(index) != eyedropperPointerId) return
+                sampleEyedropperAt(event.getX(index), event.getY(index), model)
+                finishEyedropperSample(model)
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!eyedropperActive) return
+                val index = event.findPointerIndex(eyedropperPointerId)
+                if (index >= 0) sampleEyedropperAt(event.getX(index), event.getY(index), model)
+                finishEyedropperSample(model)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                model.cancelEyedropper()
+                eyedropperActive = false
+                eyedropperPointerId = -1
+                invalidate()
+            }
+        }
+    }
+
+    private fun isPalm(event: MotionEvent, index: Int): Boolean =
+        event.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER &&
+            event.getSize(index) > 0.32f
+
+    private fun isPen(event: MotionEvent, index: Int): Boolean {
+        val type = event.getToolType(index)
+        return type == MotionEvent.TOOL_TYPE_STYLUS ||
+            type == MotionEvent.TOOL_TYPE_ERASER ||
+            type == MotionEvent.TOOL_TYPE_MOUSE
+    }
+
+    private fun startEyedropperPointer(event: MotionEvent, index: Int, model: EditorModel) {
+        eyedropperActive = true
+        eyedropperPointerId = event.getPointerId(index)
+        sampleEyedropperAt(event.getX(index), event.getY(index), model)
+    }
+
+    private fun finishEyedropperSample(model: EditorModel) {
+        model.finishEyedropper()
+        eyedropperActive = false
+        eyedropperPointerId = -1
+        invalidate()
+    }
+
+    private fun sampleEyedropperAt(screenX: Float, screenY: Float, model: EditorModel) {
+        eyedropperX = screenX
+        eyedropperY = screenY
+        val project = model.project
+        val x = toProjectX(screenX)
+        val y = toProjectY(screenY)
+        if (x >= 0f && y >= 0f && x <= project.width && y <= project.height) {
+            val radius = (dp(8f) / scale).coerceIn(1.5f, 64f)
+            model.sampleEyedropper(x, y, radius)
+        }
+        invalidate()
+    }
+
+    private fun drawEyedropperLoupe(canvas: Canvas, model: EditorModel) {
+        val radius = dp(27f)
+        var cx = eyedropperX
+        var cy = eyedropperY - dp(58f)
+        if (cy - radius < dp(10f)) cy = eyedropperY + dp(58f)
+        val margin = radius + dp(10f)
+        val maxX = (width - margin).coerceAtLeast(margin)
+        val maxY = (height - margin).coerceAtLeast(margin)
+        cx = cx.coerceIn(margin, maxX)
+        cy = cy.coerceIn(margin, maxY)
+
+        shadowPaint.color = Color.argb(if (darkTheme) 120 else 38, 0, 0, 0)
+        canvas.drawCircle(cx, cy + dp(2.5f), radius + dp(1.5f), shadowPaint)
+
+        cursorFill.color = model.color
+        canvas.drawCircle(cx, cy, radius, cursorFill)
+        cursorPaint.style = Paint.Style.STROKE
+        cursorPaint.strokeWidth = dp(1.2f)
+        cursorPaint.color = Color.argb(235, 255, 255, 255)
+        canvas.drawCircle(cx, cy, radius, cursorPaint)
+        cursorPaint.strokeWidth = dp(0.8f)
+        cursorPaint.color = Color.argb(80, 0, 0, 0)
+        canvas.drawCircle(cx, cy, radius + dp(1.4f), cursorPaint)
+
+        cursorPaint.strokeWidth = dp(1.4f)
+        cursorPaint.color = Color.argb(210, 255, 255, 255)
+        canvas.drawCircle(eyedropperX, eyedropperY, dp(7f), cursorPaint)
+        cursorPaint.strokeWidth = dp(0.8f)
+        cursorPaint.color = Color.argb(120, 0, 0, 0)
+        canvas.drawCircle(eyedropperX, eyedropperY, dp(8.2f), cursorPaint)
+        cursorFill.color = Color.argb(215, 255, 255, 255)
+        canvas.drawCircle(eyedropperX, eyedropperY, dp(1.5f), cursorFill)
     }
 
     private fun handleDown(event: MotionEvent, model: EditorModel) {

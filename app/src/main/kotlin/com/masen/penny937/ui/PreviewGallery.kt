@@ -261,8 +261,28 @@ fun ColorSheetPreview() {
     val model = previewModel()
     PennyTheme {
         Box(Modifier.fillMaxSize()) {
-            ColorSheet(visible = true, editor = model, onDismiss = {})
+            ColorSheet(
+                visible = true,
+                editor = model,
+                onDismiss = {},
+                onPickFromLayer = {}
+            )
         }
+    }
+}
+
+@Preview(name = "Color picker", widthDp = 412, heightDp = 915, showBackground = true)
+@Composable
+fun EyedropperPreview() {
+    val model = previewModel()
+    remember(model) { model.beginEyedropper() }
+    PennyTheme {
+        EditorScreen(
+            editor = model,
+            onClose = {},
+            onDuplicateProject = {},
+            onDeleteProject = {}
+        )
     }
 }
 

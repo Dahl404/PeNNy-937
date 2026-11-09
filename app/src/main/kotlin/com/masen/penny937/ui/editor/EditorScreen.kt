@@ -111,6 +111,7 @@ fun EditorScreen(
     var canvasView by remember { mutableStateOf<DrawingCanvasView?>(null) }
     var hintVisible by remember { mutableStateOf(editor.showGestureHint) }
     val placing by remember { derivedStateOf { editor.placement != null } }
+    val picking by remember { derivedStateOf { editor.eyedropper != null } }
     val pickReference = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -124,7 +125,7 @@ fun EditorScreen(
     val hintAlpha by animateFloatAsState(
         targetValue = if (
             hintVisible && sheet == EditorSheet.NONE && !editor.isPlaying &&
-            !placing && editor.hint == null
+            !placing && !picking && editor.hint == null
         ) 1f else 0f,
         animationSpec = tween(280),
         label = "hint"
@@ -143,6 +144,7 @@ fun EditorScreen(
     BackHandler {
         when {
             editor.videoImport != null -> editor.cancelVideoImport()
+            editor.eyedropper != null -> editor.cancelEyedropper()
             editor.placement != null -> editor.cancelPlacement()
             confirmDelete -> confirmDelete = false
             sheet != EditorSheet.NONE -> sheet = EditorSheet.NONE
@@ -178,7 +180,9 @@ fun EditorScreen(
 
     Box(Modifier.fillMaxSize().background(palette.background)) {
         Column(Modifier.fillMaxSize()) {
-            if (placing) {
+            if (picking) {
+                EyedropperTopBar(editor, onCancel = { editor.cancelEyedropper() })
+            } else if (placing) {
                 PlacementTopBar(
                     onCancel = { editor.cancelPlacement() },
                     onDone = { editor.confirmPlacement() }
@@ -198,7 +202,9 @@ fun EditorScreen(
                     onViewCreated = { canvasView = it }
                 )
 
-                if (placing) {
+                if (picking) {
+                    // Picking mode is canvas-only; the top bar and footer explain it.
+                } else if (placing) {
                     // The canvas draws the reference placement overlay itself.
                 } else if (!editor.isPlaying) {
                     ToolRail(
@@ -297,7 +303,9 @@ fun EditorScreen(
                     )
                 }
             }
-            if (placing) {
+            if (picking) {
+                EyedropperFooter()
+            } else if (placing) {
                 PlacementFooter()
             } else if (!editor.isPlaying) {
                 EditorDock(
@@ -312,9 +320,16 @@ fun EditorScreen(
             }
         }
 
-        ColorSheet(visible = sheet == EditorSheet.COLOR, editor = editor) {
-            sheet = EditorSheet.NONE
-        }
+        ColorSheet(
+            visible = sheet == EditorSheet.COLOR,
+            editor = editor,
+            onDismiss = { sheet = EditorSheet.NONE },
+            onPickFromLayer = {
+                sheet = EditorSheet.NONE
+                PennyHaptics.tap(view)
+                editor.beginEyedropper()
+            }
+        )
         BrushSheet(visible = sheet == EditorSheet.BRUSH, editor = editor) {
             sheet = EditorSheet.NONE
         }
@@ -454,6 +469,100 @@ private fun VideoImportOverlay(editor: EditorModel) {
                     icon = PennyIcons.Close
                 )
             }
+        }
+    }
+}
+
+private fun hexColor(color: Int): String = String.format("#%06X", 0xFFFFFF and color)
+
+@Composable
+private fun EyedropperTopBar(editor: EditorModel, onCancel: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val pillShape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PennyIconButton(
+            icon = PennyIcons.Close,
+            onClick = onCancel,
+            size = 38.dp,
+            iconSize = 18.dp,
+            background = palette.surface,
+            contentDescription = "Cancel color pick"
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Pick color",
+                style = type.headline,
+                color = palette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "Sampling ${editor.eyedropper?.layerName ?: "the selected layer"} only",
+                style = type.caption,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .clip(pillShape)
+                .background(palette.surface)
+                .border(0.5.dp, palette.hairline, pillShape)
+                .padding(start = 7.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ColorCircle(color = Color(editor.color), size = 24.dp)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                hexColor(editor.color),
+                style = type.mono,
+                color = palette.textPrimary,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun EyedropperFooter() {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(palette.surfaceSunken)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                PennyIcons.Eyedropper,
+                contentDescription = null,
+                tint = palette.textSecondary,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "Tap or drag to sample · lift to keep",
+                style = type.caption,
+                color = palette.textSecondary
+            )
         }
     }
 }

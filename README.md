@@ -27,10 +27,11 @@ Gradle 9.8.2 (the wrapper handles Gradle).
 | Finger (default "Stylus only" on) | Pan the canvas |
 | Two fingers | Pinch zoom + pan |
 | Double tap (finger) | Toggle fit / 2.4× zoom |
-| Tap the active tool | Brush settings |
-| Drag the dots under a frame | Reorder frames in the timeline |
+| Sliders button in the tool rail | Brush / shape settings |
+| Drag the handle under a frame | Reorder frames in the timeline |
 | Layers → Import reference image | Import, place, scale/rotate and lock a tracing guide |
 | Long-press a frame | Frame actions (duplicate, delete, hold) |
+| Plus in the transport | Add a blank frame |
 | Trackpad/mouse (stylus-only off) | Also draws |
 
 Palm-sized contacts are ignored. On-screen buttons for fit, undo/redo, playback,

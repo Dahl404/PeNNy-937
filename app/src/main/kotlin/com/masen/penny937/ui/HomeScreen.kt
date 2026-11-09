@@ -179,7 +179,6 @@ fun HomeScreen(
             visible = actionVisible,
             meta = actionMeta,
             onDismiss = { actionVisible = false },
-            onOpen = { onOpen(it); actionVisible = false },
             onDuplicate = { onDuplicate(it); actionVisible = false },
             onDelete = { id ->
                 deleteTarget = projects.firstOrNull { it.id == id }
@@ -544,7 +543,6 @@ private fun BoxScope.ProjectActionSheet(
     visible: Boolean,
     meta: ProjectMeta?,
     onDismiss: () -> Unit,
-    onOpen: (Long) -> Unit,
     onDuplicate: (Long) -> Unit,
     onDelete: (Long) -> Unit
 ) {
@@ -559,14 +557,6 @@ private fun BoxScope.ProjectActionSheet(
         }
     ) {
         if (meta != null) {
-            SecondaryButton(
-                text = "Open project",
-                onClick = { onOpen(meta.id) },
-                modifier = Modifier.fillMaxWidth(),
-                icon = PennyIcons.ChevronRight,
-                tint = palette.accent
-            )
-            Spacer(Modifier.height(10.dp))
             SecondaryButton(
                 text = "Duplicate",
                 onClick = { onDuplicate(meta.id) },
@@ -619,7 +609,8 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             TipRow("Stylus draws. Two fingers pan and zoom.")
             TipRow("Press the pen's side button to erase for that stroke.")
             TipRow("Slide the onion control left for a blue ghost of the last frame, right for a red ghost of the next. Centre is off.")
-            TipRow("Drag the dots under a frame to rearrange the timeline; long-press a frame for its options.")
+            TipRow("Drag the handle under a frame to rearrange the timeline; long-press a frame for its options.")
+            TipRow("The sliders in the tool rail open brush and shape settings.")
             TipRow("Every frame has its own unlimited layers.")
             TipRow("Import a reference image from Layers, drag to place, pinch to scale and rotate. It locks itself and is never exported.")
             TipRow("Line, rectangle, square, ellipse and circle are one drag away.")
@@ -629,7 +620,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.4 · Made for stylus and patience",
+                "Version 1.4.1 · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
             )

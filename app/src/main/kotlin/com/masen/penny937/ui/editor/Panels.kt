@@ -911,16 +911,6 @@ fun BoxScope.FrameSheet(
             )
             Spacer(Modifier.height(8.dp))
             SecondaryButton(
-                text = "Add blank frame after",
-                onClick = {
-                    editor.addFrame()
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth(),
-                icon = PennyIcons.Plus
-            )
-            Spacer(Modifier.height(8.dp))
-            SecondaryButton(
                 text = "Delete frame",
                 onClick = {
                     editor.deleteFrame()
@@ -1179,22 +1169,16 @@ fun BoxScope.ProjectMenuSheet(
                 onCheckedChange = { editor.togglePressure() }
             )
             Spacer(Modifier.height(12.dp))
-            ToggleRow(
-                title = "Grid",
-                subtitle = "Guide lines over the paper",
-                checked = editor.gridEnabled,
-                onCheckedChange = { editor.toggleGrid() }
-            )
-            if (editor.gridEnabled) {
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (style in GridStyle.entries) {
-                        ChoiceChip(
-                            label = style.label,
-                            selected = editor.gridStyle == style,
-                            onClick = { editor.chooseGridStyle(style) }
-                        )
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Grid style", style = type.label, color = palette.textSecondary)
+                Spacer(Modifier.width(10.dp))
+                for (style in GridStyle.entries) {
+                    ChoiceChip(
+                        label = style.label,
+                        selected = editor.gridStyle == style,
+                        onClick = { editor.chooseGridStyle(style) },
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))

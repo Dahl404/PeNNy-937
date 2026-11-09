@@ -527,8 +527,6 @@ private fun EditorTopBar(
         Column(
             Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(10.dp))
-                .clickable { onMenu() }
                 .padding(horizontal = 4.dp, vertical = 4.dp)
         ) {
             Text(
@@ -606,8 +604,10 @@ private fun ToolRail(
                     selected = editor.tool == tool,
                     contentDescription = tool.label,
                     onClick = {
-                        PennyHaptics.select(view)
-                        if (editor.tool == tool) onBrush() else editor.chooseTool(tool)
+                        if (editor.tool != tool) {
+                            PennyHaptics.select(view)
+                            editor.chooseTool(tool)
+                        }
                     }
                 )
             }
@@ -838,12 +838,6 @@ private fun EditorDock(
                                 )
                             }
                         }
-                        item(key = "add") {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                AddFrameCard(onClick = onAddFrame)
-                                Spacer(Modifier.height(17.dp))
-                            }
-                        }
                     }
                     val currentDrag = drag
                     if (currentDrag != null && abs(currentDrag.offsetX) > lineThreshold) {
@@ -908,18 +902,6 @@ private fun EditorDock(
                     )
                     Spacer(Modifier.weight(1f))
                     PennyIconButton(
-                        icon = PennyIcons.Copy,
-                        onClick = {
-                            PennyHaptics.tap(view)
-                            editor.duplicateFrame()
-                        },
-                        size = 34.dp,
-                        iconSize = 17.dp,
-                        tint = palette.textSecondary,
-                        contentDescription = "Duplicate frame"
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    PennyIconButton(
                         icon = PennyIcons.Plus,
                         onClick = onAddFrame,
                         size = 36.dp,
@@ -927,15 +909,6 @@ private fun EditorDock(
                         tint = palette.accent,
                         background = palette.accentSoft,
                         contentDescription = "Add frame"
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    PennyIconButton(
-                        icon = PennyIcons.More,
-                        onClick = onFrameMenu,
-                        size = 34.dp,
-                        iconSize = 17.dp,
-                        tint = palette.textSecondary,
-                        contentDescription = "Frame options"
                     )
                 }
             }
@@ -1157,19 +1130,16 @@ private fun FrameGrip(
                 .background(if (dragging) palette.accentSoft else palette.surfaceSunken),
             contentAlignment = Alignment.Center
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                repeat(3) {
-                    Box(
-                        Modifier
-                            .size(2.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (selected || dragging) palette.accent
-                                else palette.textTertiary.copy(alpha = 0.55f)
-                            )
+            Box(
+                Modifier
+                    .width(16.dp)
+                    .height(3.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (selected || dragging) palette.accent
+                        else palette.textTertiary.copy(alpha = 0.55f)
                     )
-                }
-            }
+            )
         }
     }
 }
@@ -1207,29 +1177,6 @@ private fun FrameThumbnail(project: Project, frame: Frame, modifier: Modifier = 
         )
     } else {
         Box(modifier)
-    }
-}
-
-@Composable
-private fun AddFrameCard(onClick: () -> Unit) {
-    val palette = LocalPenny.current
-    val shape = RoundedCornerShape(9.dp)
-    Box(
-        modifier = Modifier
-            .width(44.dp)
-            .height(58.dp)
-            .clip(shape)
-            .background(palette.surfaceSunken)
-            .border(0.7.dp, palette.hairline, shape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            PennyIcons.Plus,
-            contentDescription = "Add frame",
-            tint = palette.accent,
-            modifier = Modifier.size(18.dp)
-        )
     }
 }
 

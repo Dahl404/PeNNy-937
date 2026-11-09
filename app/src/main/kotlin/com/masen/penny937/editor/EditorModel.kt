@@ -293,6 +293,8 @@ class EditorModel(
                 showHint("Could not import that image")
                 return@launch
             }
+            cancelActiveInk()
+            if (isPlaying) stopPlayback()
             if (currentFrame != targetFrame) {
                 currentFrame = targetFrame.coerceIn(0, project.frames.lastIndex)
                 currentLayer = currentLayer.coerceIn(0, frame.layers.lastIndex)

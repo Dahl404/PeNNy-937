@@ -1,0 +1,1101 @@
+package com.masen.penny937.ui.editor
+
+import android.graphics.Color as AColor
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.masen.penny937.editor.EditorModel
+import com.masen.penny937.editor.ExportState
+import com.masen.penny937.export.ExportFormat
+import com.masen.penny937.model.ProjectFactory
+import com.masen.penny937.model.Stroke
+import com.masen.penny937.model.Tool
+import com.masen.penny937.paint.Ink
+import com.masen.penny937.ui.SharedFiles
+import com.masen.penny937.ui.components.ChoiceChip
+import com.masen.penny937.ui.components.ColorCircle
+import com.masen.penny937.ui.components.Hairline
+import com.masen.penny937.ui.components.PennyIconButton
+import com.masen.penny937.ui.components.PennySheet
+import com.masen.penny937.ui.components.PennySlider
+import com.masen.penny937.ui.components.PennyTextField
+import com.masen.penny937.ui.components.PennyToggle
+import com.masen.penny937.ui.components.PrimaryButton
+import com.masen.penny937.ui.components.SecondaryButton
+import com.masen.penny937.ui.components.SectionLabel
+import com.masen.penny937.ui.components.SegmentedControl
+import com.masen.penny937.ui.components.StatPill
+import com.masen.penny937.ui.components.ToggleRow
+import com.masen.penny937.ui.components.ValueStepper
+import com.masen.penny937.ui.icons.PennyIcons
+import com.masen.penny937.ui.theme.LocalPenny
+import com.masen.penny937.ui.theme.LocalPennyType
+import androidx.compose.ui.platform.LocalContext
+import kotlin.math.roundToInt
+import kotlin.math.sin
+
+private val InkSwatches = listOf(
+    0xFF1D1D1F,
+    0xFF6E6E73,
+    0xFFFFFFFF,
+    0xFFFF3B30,
+    0xFFFF9500,
+    0xFFFFCC00,
+    0xFF34C759,
+    0xFF30B0C7,
+    0xFF007AFF,
+    0xFF5856D6,
+    0xFFAF52DE,
+    0xFFFF2D55,
+    0xFF8B5A2B
+).map { it.toInt() }
+
+private val Rainbow = listOf(
+    Color(0xFFFF3B30),
+    Color(0xFFFFCC00),
+    Color(0xFF34C759),
+    Color(0xFF30B0C7),
+    Color(0xFF007AFF),
+    Color(0xFFAF52DE),
+    Color(0xFFFF3B30)
+)
+
+private fun hsvColor(h: Float, s: Float, v: Float): Int =
+    AColor.HSVToColor(floatArrayOf(h, s, v))
+
+private fun hexOf(color: Int): String = String.format("#%06X", 0xFFFFFF and color)
+
+@Composable
+fun BoxScope.ColorSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val initial = remember { FloatArray(3).also { AColor.colorToHSV(editor.color, it) } }
+    var hue by remember { mutableFloatStateOf(initial[0]) }
+    var sat by remember { mutableFloatStateOf(initial[1]) }
+    var value by remember { mutableFloatStateOf(initial[2]) }
+    androidx.compose.runtime.LaunchedEffect(visible) {
+        if (visible) {
+            AColor.colorToHSV(editor.color, initial)
+            hue = initial[0]
+            sat = initial[1]
+            value = initial[2]
+        }
+    }
+
+    fun commit() {
+        editor.chooseColor(hsvColor(hue, sat, value))
+    }
+
+    fun select(color: Int) {
+        val hsv = FloatArray(3)
+        AColor.colorToHSV(color, hsv)
+        hue = hsv[0]
+        sat = hsv[1]
+        value = hsv[2]
+        editor.chooseColor(color)
+    }
+
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Color",
+        subtitle = "Ink for the current tool"
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ColorCircle(color = Color(editor.color), size = 54.dp)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(
+                        hexOf(editor.color),
+                        style = type.title.copy(letterSpacing = 0.5.sp),
+                        color = palette.textPrimary
+                    )
+                    Text("Current ink", style = type.caption, color = palette.textSecondary)
+                }
+                Spacer(Modifier.weight(1f))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("${hue.roundToInt()}°", style = type.mono, color = palette.textSecondary)
+                    Text(
+                        "${(sat * 100).roundToInt()}% · ${(value * 100).roundToInt()}%",
+                        style = type.caption,
+                        color = palette.textTertiary
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            SliderBlock(label = "Hue", valueText = "${hue.roundToInt()}°") {
+                PennySlider(
+                    value = hue,
+                    onValueChange = { hue = it; commit() },
+                    valueRange = 0f..360f,
+                    trackColors = Rainbow
+                )
+            }
+            SliderBlock(
+                label = "Saturation",
+                valueText = "${(sat * 100).roundToInt()}%"
+            ) {
+                val from = Color(hsvColor(hue, 0f, value))
+                val to = Color(hsvColor(hue, 1f, value))
+                PennySlider(
+                    value = sat,
+                    onValueChange = { sat = it; commit() },
+                    valueRange = 0f..1f,
+                    trackColors = listOf(from, to)
+                )
+            }
+            SliderBlock(
+                label = "Brightness",
+                valueText = "${(value * 100).roundToInt()}%"
+            ) {
+                PennySlider(
+                    value = value,
+                    onValueChange = { value = it; commit() },
+                    valueRange = 0.02f..1f,
+                    trackColors = listOf(Color.Black, Color(hsvColor(hue, sat, 1f)))
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("SWATCHES")
+            Spacer(Modifier.height(10.dp))
+            val rows = InkSwatches.chunked(7)
+            for ((rowIndex, row) in rows.withIndex()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    for (color in row) {
+                        ColorCircle(
+                            color = Color(color),
+                            size = 30.dp,
+                            selected = editor.color == color,
+                            onClick = { select(color) }
+                        )
+                    }
+                }
+                if (rowIndex != rows.lastIndex) Spacer(Modifier.height(12.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun SliderBlock(
+    label: String,
+    valueText: String,
+    content: @Composable () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = type.label, color = palette.textSecondary)
+            Spacer(Modifier.weight(1f))
+            Text(valueText, style = type.mono, color = palette.textPrimary)
+        }
+        Spacer(Modifier.height(2.dp))
+        content()
+        Spacer(Modifier.height(6.dp))
+    }
+}
+
+@Composable
+fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val tool = editor.tool
+    val minWidth = tool.minWidth()
+    val maxWidth = tool.maxWidth()
+    val quickSizes = when (tool) {
+        Tool.PEN, Tool.PENCIL -> listOf(2f, 4f, 8f, 16f, 32f)
+        else -> listOf(16f, 32f, 64f, 120f)
+    }
+    val previewColor = if (tool == Tool.ERASER) 0xFF8E8E93.toInt() else editor.color
+    val previewTool = if (tool == Tool.ERASER) Tool.PEN else tool
+    val previewStroke = remember(tool, editor.color, editor.size, editor.markerOpacity) {
+        val n = 96
+        val points = FloatArray(n * 3)
+        for (i in 0 until n) {
+            val t = i / (n - 1f)
+            points[i * 3] = 8f + t * 584f
+            points[i * 3 + 1] = 150f + sin(t * 4.1f) * 32f
+            points[i * 3 + 2] = 0.15f + 0.85f * sin(t * Math.PI).toFloat()
+        }
+        Stroke(
+            tool = previewTool,
+            color = previewColor,
+            width = editor.size,
+            opacity = if (tool == Tool.MARKER) editor.markerOpacity else 1f,
+            points = points
+        )
+    }
+
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = tool.label,
+        subtitle = when (tool) {
+            Tool.PEN -> "Pressure-tapered ink"
+            Tool.PENCIL -> "Grainy graphite"
+            Tool.MARKER -> "Broad translucent colour"
+            Tool.ERASER -> "Removes ink from the active layer"
+        },
+        leading = {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(palette.accentSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = when (tool) {
+                        Tool.PEN -> PennyIcons.Pen
+                        Tool.PENCIL -> PennyIcons.Pencil
+                        Tool.MARKER -> PennyIcons.Marker
+                        Tool.ERASER -> PennyIcons.Eraser
+                    },
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            PreviewBox(projectBackground = editor.project.background, stroke = previewStroke)
+            Spacer(Modifier.height(16.dp))
+            SliderBlock(label = "Size", valueText = "${editor.size.roundToInt()} px") {
+                PennySlider(
+                    value = editor.size,
+                    onValueChange = { editor.changeSize(it) },
+                    valueRange = minWidth..maxWidth
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (size in quickSizes) {
+                    ChoiceChip(
+                        label = "${size.roundToInt()}",
+                        selected = (editor.size - size).let { kotlin.math.abs(it) < 0.6f },
+                        onClick = { editor.changeSize(size) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            ToggleRow(
+                title = "Pressure",
+                subtitle = "Vary width with stylus pressure",
+                checked = editor.pressureEnabled,
+                onCheckedChange = { editor.togglePressure() }
+            )
+            if (tool == Tool.MARKER) {
+                Spacer(Modifier.height(14.dp))
+                Hairline()
+                Spacer(Modifier.height(14.dp))
+                SliderBlock(
+                    label = "Marker opacity",
+                    valueText = "${(editor.markerOpacity * 100).roundToInt()}%"
+                ) {
+                    PennySlider(
+                        value = editor.markerOpacity,
+                        onValueChange = { editor.changeMarkerOpacity(it) },
+                        valueRange = 0.05f..0.9f
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                when (tool) {
+                    Tool.PEN -> "Pen width follows stylus pressure. Hold the pen's side button for a temporary eraser."
+                    Tool.PENCIL -> "Graphite texture is generated at your ink colour, so it feels the same at every zoom level."
+                    Tool.MARKER -> "Marker ink is composited once per stroke, so overlaps never turn darker at the seams."
+                    Tool.ERASER -> "The eraser only touches the active layer. Hide a layer to protect it."
+                },
+                style = type.caption,
+                color = palette.textTertiary,
+                lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun PreviewBox(projectBackground: Int, stroke: Stroke) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Column {
+        Row {
+            SectionLabel("PREVIEW")
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${stroke.width.roundToInt()} px",
+                style = type.caption,
+                color = palette.textTertiary
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(140.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(projectBackground))
+                .border(0.6.dp, palette.hairline, RoundedCornerShape(16.dp))
+        ) {
+            val designWidth = 600f
+            val scale = size.width / designWidth
+            drawIntoCanvas { canvas ->
+                val native = canvas.nativeCanvas
+                native.save()
+                native.translate(0f, size.height / 2f)
+                native.scale(scale, scale)
+                native.translate(0f, -150f)
+                Ink.renderStroke(native, stroke)
+                native.restore()
+            }
+        }
+    }
+}
+
+@Composable
+fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val frame = editor.frame
+    val layerCount = frame.layers.size
+    val indices = remember(frame.layers.size) { frame.layers.indices.reversed().toList() }
+
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Layers",
+        subtitle = "Frame ${editor.currentFrame + 1} · $layerCount ${if (layerCount == 1) "layer" else "layers"}",
+        leading = {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(palette.accentSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    PennyIcons.Layers,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            SecondaryButton(
+                text = "Add layer",
+                onClick = { editor.addLayer() },
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Plus,
+                tint = palette.accent
+            )
+            Spacer(Modifier.height(10.dp))
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 276.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(indices, key = { frame.layers[it].id }) { index ->
+                    val layer = frame.layers[index]
+                    val selected = index == editor.currentLayer
+                    val shape = RoundedCornerShape(12.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(shape)
+                            .background(if (selected) palette.accentSoft else palette.surfaceSunken)
+                            .border(
+                                if (selected) 1.dp else 0.5.dp,
+                                if (selected) palette.accent.copy(alpha = 0.45f) else palette.hairline,
+                                shape
+                            )
+                            .clickable { editor.selectLayer(index) }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        PennyIconButton(
+                            icon = if (layer.visible) PennyIcons.Eye else PennyIcons.EyeOff,
+                            onClick = { editor.setLayerVisible(index, !layer.visible) },
+                            size = 32.dp,
+                            iconSize = 16.dp,
+                            tint = if (layer.visible) palette.textSecondary else palette.textTertiary
+                        )
+                        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                            Text(
+                                layer.name,
+                                style = type.label.copy(
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                                ),
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${layer.strokes.size} strokes · ${(layer.opacity * 100).roundToInt()}%",
+                                style = type.caption,
+                                color = palette.textTertiary
+                            )
+                        }
+                        PennyIconButton(
+                            icon = PennyIcons.ArrowUp,
+                            onClick = { editor.selectLayer(index); editor.moveLayerUp() },
+                            size = 28.dp,
+                            iconSize = 14.dp,
+                            enabled = index < layerCount - 1,
+                            tint = palette.textSecondary
+                        )
+                        PennyIconButton(
+                            icon = PennyIcons.ArrowDown,
+                            onClick = { editor.selectLayer(index); editor.moveLayerDown() },
+                            size = 28.dp,
+                            iconSize = 14.dp,
+                            enabled = index > 0,
+                            tint = palette.textSecondary
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Layer opacity", style = type.label, color = palette.textSecondary)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${(editor.layer.opacity * 100).roundToInt()}%",
+                    style = type.mono,
+                    color = palette.textPrimary
+                )
+            }
+            PennySlider(
+                value = editor.layer.opacity,
+                onValueChange = { editor.setLayerOpacity(it) },
+                valueRange = 0.05f..1f
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SecondaryButton(
+                    text = "Duplicate",
+                    onClick = { editor.duplicateLayer() },
+                    modifier = Modifier.weight(1f),
+                    icon = PennyIcons.Copy
+                )
+                SecondaryButton(
+                    text = "Merge down",
+                    onClick = { editor.mergeLayerDown() },
+                    modifier = Modifier.weight(1f),
+                    icon = PennyIcons.ArrowDown,
+                    enabled = editor.currentLayer > 0
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = if (layerCount <= 1) "Clear layer" else "Delete layer",
+                onClick = { editor.deleteLayer() },
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Trash,
+                tint = palette.danger
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun BoxScope.SettingsSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    var name by remember { mutableStateOf(editor.project.name) }
+    var widthText by remember { mutableStateOf(editor.project.width.toString()) }
+    var heightText by remember { mutableStateOf(editor.project.height.toString()) }
+    var fps by remember { mutableFloatStateOf(editor.project.fps.toFloat()) }
+    var background by remember { mutableStateOf(editor.project.background) }
+    androidx.compose.runtime.LaunchedEffect(visible) {
+        if (visible) {
+            name = editor.project.name
+            widthText = editor.project.width.toString()
+            heightText = editor.project.height.toString()
+            fps = editor.project.fps.toFloat()
+            background = editor.project.background
+        }
+    }
+
+    val width = widthText.toIntOrNull()
+    val height = heightText.toIntOrNull()
+    val valid = width != null && height != null &&
+        width in ProjectFactory.MIN_DIM..ProjectFactory.MAX_DIM &&
+        height in ProjectFactory.MIN_DIM..ProjectFactory.MAX_DIM
+    val dimsChanged = width != editor.project.width || height != editor.project.height
+
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Canvas",
+        subtitle = "Everything is vector — resize at any time."
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            SectionLabel("PROJECT NAME")
+            Spacer(Modifier.height(7.dp))
+            PennyTextField(
+                value = name,
+                onValueChange = { name = it.take(60) },
+                placeholder = "Untitled",
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(18.dp))
+
+            SectionLabel("SIZE")
+            Spacer(Modifier.height(7.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PennyTextField(
+                    value = widthText,
+                    onValueChange = { widthText = it.filter(Char::isDigit).take(4) },
+                    placeholder = "W",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                )
+                Text(
+                    "×",
+                    style = type.label,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(horizontal = 10.dp)
+                )
+                PennyTextField(
+                    value = heightText,
+                    onValueChange = { heightText = it.filter(Char::isDigit).take(4) },
+                    placeholder = "H",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                )
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                if (valid) {
+                    val pixels = (width ?: 0).toLong() * (height ?: 0)
+                    when {
+                        pixels > 8_000_000L -> "Large canvas — rendering will use a lot of memory."
+                        dimsChanged -> "Existing artwork stays at its current scale."
+                        else -> "32 to 4096 pixels per side"
+                    }
+                } else {
+                    "Each side needs to be between 32 and 4096 px"
+                },
+                style = type.caption,
+                color = if (valid) palette.textTertiary else palette.danger
+            )
+            Spacer(Modifier.height(18.dp))
+
+            SectionLabel("FRAME RATE")
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${fps.roundToInt()}",
+                    style = type.title,
+                    color = palette.textPrimary
+                )
+                Spacer(Modifier.width(5.dp))
+                Text("fps", style = type.caption, color = palette.textSecondary)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${editor.project.frames.size} ${if (editor.project.frames.size == 1) "frame" else "frames"}",
+                    style = type.caption,
+                    color = palette.textTertiary
+                )
+            }
+            PennySlider(
+                value = fps,
+                onValueChange = { fps = it },
+                valueRange = ProjectFactory.MIN_FPS.toFloat()..ProjectFactory.MAX_FPS.toFloat()
+            )
+            Spacer(Modifier.height(14.dp))
+
+            SectionLabel("PAPER")
+            Spacer(Modifier.height(9.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                for ((_, color) in ProjectFactory.backgrounds) {
+                    ColorCircle(
+                        color = Color(color),
+                        size = 34.dp,
+                        selected = background == color,
+                        onClick = { background = color }
+                    )
+                }
+            }
+            Spacer(Modifier.height(22.dp))
+            PrimaryButton(
+                text = "Apply changes",
+                onClick = {
+                    editor.updateSettings(
+                        name = name.ifBlank { editor.project.name },
+                        width = width ?: editor.project.width,
+                        height = height ?: editor.project.height,
+                        fps = fps.roundToInt(),
+                        background = background
+                    )
+                    onDismiss()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = valid
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Projects have no maximum length. Add frames for as long as the idea lasts.",
+                style = type.caption,
+                color = palette.textTertiary,
+                lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun BoxScope.FrameSheet(
+    visible: Boolean,
+    editor: EditorModel,
+    onDismiss: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val frame = editor.frame
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Frame ${editor.currentFrame + 1}",
+        subtitle = "of ${editor.project.frames.size} · ${editor.project.fps} fps",
+        leading = {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(palette.accentSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    PennyIcons.Frame,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Hold", style = type.bodyStrong, color = palette.textPrimary)
+                    Text(
+                        "Repeat this frame for extra ticks.",
+                        style = type.caption,
+                        color = palette.textSecondary
+                    )
+                }
+                ValueStepper(
+                    value = frame.hold,
+                    onValueChange = { editor.setFrameHold(it) },
+                    range = 1..24
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            SecondaryButton(
+                text = "Duplicate frame",
+                onClick = {
+                    editor.duplicateFrame()
+                    onDismiss()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Copy
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Add blank frame after",
+                onClick = {
+                    editor.addFrame()
+                    onDismiss()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Plus
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Delete frame",
+                onClick = {
+                    editor.deleteFrame()
+                    onDismiss()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Trash,
+                tint = palette.danger,
+                enabled = editor.project.frames.size > 1
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    var format by remember { mutableStateOf(ExportFormat.GIF) }
+    var scale by remember { mutableIntStateOf(720) }
+    val state = editor.exportState
+    val project = editor.project
+    val targetWidth = if (format == ExportFormat.CURRENT_FRAME) project.width
+    else if (scale <= 0) project.width else kotlin.math.min(scale, project.width)
+
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Export",
+        subtitle = "${project.frames.size} ${if (project.frames.size == 1) "frame" else "frames"} · ${project.fps} fps · ${
+            String.format("%.1f", project.durationSeconds)
+        }s"
+    ) {
+        Column {
+            SegmentedControl(
+                options = listOf("GIF", "Frames", "Still"),
+                selectedIndex = when (format) {
+                    ExportFormat.GIF -> 0
+                    ExportFormat.PNG_SEQUENCE -> 1
+                    ExportFormat.CURRENT_FRAME -> 2
+                },
+                onSelect = {
+                    if (editor.exportState is ExportState.Running) editor.cancelExport()
+                    format = when (it) {
+                        0 -> ExportFormat.GIF
+                        1 -> ExportFormat.PNG_SEQUENCE
+                        else -> ExportFormat.CURRENT_FRAME
+                    }
+                    editor.dismissExport()
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (format == ExportFormat.GIF) {
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip(
+                        label = "Full",
+                        selected = scale <= 0,
+                        onClick = { scale = 0 }
+                    )
+                    ChoiceChip(
+                        label = "720px",
+                        selected = scale == 720,
+                        onClick = { scale = 720 }
+                    )
+                    ChoiceChip(
+                        label = "480px",
+                        selected = scale == 480,
+                        onClick = { scale = 480 }
+                    )
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surfaceSunken)
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Text(
+                        when (format) {
+                            ExportFormat.GIF -> "Animated GIF with per-frame palettes and dithering."
+                            ExportFormat.PNG_SEQUENCE -> "A zip of lossless PNG frames — the best master copy."
+                            ExportFormat.CURRENT_FRAME -> "The current frame as a lossless PNG."
+                        },
+                        style = type.body,
+                        color = palette.textPrimary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        when (format) {
+                            ExportFormat.GIF -> "Output ${targetWidth} px wide · timing quantized to 1/100s"
+                            ExportFormat.PNG_SEQUENCE -> "Output ${project.width} × ${project.height} px per frame"
+                            ExportFormat.CURRENT_FRAME -> "${project.width} × ${project.height} px"
+                        },
+                        style = type.caption,
+                        color = palette.textSecondary
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            when (state) {
+                is ExportState.Idle, is ExportState.Failed -> {
+                    if (state is ExportState.Failed) {
+                        Text(
+                            "Export failed: ${(state as ExportState.Failed).message}",
+                            style = type.caption,
+                            color = palette.danger
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    PrimaryButton(
+                        text = when (format) {
+                            ExportFormat.GIF -> "Export GIF"
+                            ExportFormat.PNG_SEQUENCE -> "Export PNG frames"
+                            ExportFormat.CURRENT_FRAME -> "Export still"
+                        },
+                        onClick = { editor.startExport(format, targetWidth) },
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = PennyIcons.Share
+                    )
+                }
+                is ExportState.Running -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Rendering", style = type.label, color = palette.textSecondary)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${(state.progress * 100).roundToInt()}%",
+                            style = type.mono,
+                            color = palette.textPrimary
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(palette.surfaceSunken)
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(state.progress.coerceIn(0f, 1f))
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(palette.accent)
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    SecondaryButton(
+                        text = "Cancel export",
+                        onClick = { editor.cancelExport() },
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = PennyIcons.Close
+                    )
+                }
+                is ExportState.Done -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatPill("Ready")
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${state.file.nameWithoutExtension} · ${state.file.length() / 1024} KB",
+                            style = type.caption,
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    PrimaryButton(
+                        text = "Share export",
+                        onClick = { SharedFiles.share(context, state.file, state.mime) },
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = PennyIcons.Share
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    SecondaryButton(
+                        text = "Export another",
+                        onClick = { editor.dismissExport() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Exports are written to the app's cache and shared through the system sheet. Save them to Photos or Files from there.",
+                style = type.caption,
+                color = palette.textTertiary,
+                lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun BoxScope.ProjectMenuSheet(
+    visible: Boolean,
+    editor: EditorModel,
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenExport: () -> Unit,
+    onDuplicateProject: () -> Unit,
+    onDeleteProject: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = editor.project.name,
+        subtitle = "${editor.project.width} × ${editor.project.height} · ${editor.project.fps} fps"
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            SecondaryButton(
+                text = "Canvas & frame rate",
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Sliders
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Export animation",
+                onClick = onOpenExport,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Share
+            )
+            Spacer(Modifier.height(16.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            ToggleRow(
+                title = "Stylus only",
+                subtitle = "Fingers navigate instead of drawing",
+                checked = editor.stylusOnly,
+                onCheckedChange = { editor.toggleStylusOnly() }
+            )
+            Spacer(Modifier.height(12.dp))
+            ToggleRow(
+                title = "Pressure",
+                subtitle = "Use stylus pressure to vary stroke width",
+                checked = editor.pressureEnabled,
+                onCheckedChange = { editor.togglePressure() }
+            )
+            Spacer(Modifier.height(12.dp))
+            ToggleRow(
+                title = "Onion skin",
+                subtitle = "Ghost the frames before and after",
+                checked = editor.onionEnabled,
+                onCheckedChange = { editor.toggleOnion() }
+            )
+            Spacer(Modifier.height(16.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            SecondaryButton(
+                text = "Duplicate project",
+                onClick = onDuplicateProject,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Copy
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Delete project",
+                onClick = onDeleteProject,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Trash,
+                tint = palette.danger
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (editor.stylusOnly) {
+                    "Stylus draws. Two fingers pan and zoom. Palms are ignored."
+                } else {
+                    "Finger or stylus draws. Two fingers pan and zoom."
+                },
+                style = type.caption,
+                color = palette.textTertiary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun BoxScope.ConfirmDeleteSheet(
+    visible: Boolean,
+    projectName: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    PennySheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = "Delete project?",
+        subtitle = projectName
+    ) {
+        Column {
+            Text(
+                "This removes every frame and layer from this device. It cannot be undone.",
+                style = type.body,
+                color = palette.textSecondary
+            )
+            Spacer(Modifier.height(18.dp))
+            SecondaryButton(
+                text = "Delete permanently",
+                onClick = onConfirm,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Trash,
+                tint = palette.danger
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Keep project",
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}

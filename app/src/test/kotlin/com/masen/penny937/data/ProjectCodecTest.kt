@@ -1,5 +1,6 @@
 package com.masen.penny937.data
 
+import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.ProjectFactory
 import com.masen.penny937.model.ProjectOps
 import com.masen.penny937.model.Stroke
@@ -10,8 +11,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 
 class ProjectCodecTest {
 
@@ -90,6 +93,95 @@ class ProjectCodecTest {
         assertEquals(project.updatedAt, meta.updatedAt)
         assertEquals(project.background, meta.background)
         assertEquals(false, meta.hasThumbnail)
+    }
+
+    @Test
+    fun roundTripsReferenceImagesAndLocks() {
+        var project = ProjectFactory.create("Refs", 1080, 1920, 12, 0xFFFFFFFF.toInt())
+        project = ProjectOps.addLayer(project, 0, 0).first
+        project = ProjectOps.updateLayer(project, 0, 1) { it.copy(locked = true) }
+        val image = LayerImage(
+            file = "ref-123.png",
+            sourceWidth = 1200,
+            sourceHeight = 900,
+            centerX = 540f,
+            centerY = 960f,
+            width = 800f,
+            height = 600f,
+            rotation = 12.5f
+        )
+        project = ProjectOps.addReferenceLayer(
+            project, 0,
+            ProjectFactory.referenceLayer("Reference", image)
+        )
+
+        val bytes = ByteArrayOutputStream().also { ProjectCodec.write(project, it) }.toByteArray()
+        val loaded = ProjectCodec.read(ByteArrayInputStream(bytes))!!
+        val layers = loaded.frames[0].layers
+        assertEquals(3, layers.size)
+        assertTrue(layers[0].isReference)
+        assertTrue(layers[0].locked)
+        assertEquals("ref-123.png", layers[0].image!!.file)
+        assertEquals(1200, layers[0].image!!.sourceWidth)
+        assertEquals(800f, layers[0].image!!.width, 0.001f)
+        assertEquals(12.5f, layers[0].image!!.rotation, 0.001f)
+        assertTrue(layers[2].locked)
+        assertEquals(null, layers[1].image)
+        assertEquals(null, layers[2].image)
+    }
+
+    @Test
+    fun readsVersionOneProjects() {
+        var project = ProjectFactory.create("Old", 640, 480, 8, 0xFFFFFFFF.toInt())
+        project = ProjectOps.addFrameAfter(project, 0)
+        project = ProjectOps.addStroke(
+            project, 0, 0,
+            Stroke(Tool.PEN, 0xFF112233.toInt(), 6f, 1f, floatArrayOf(1f, 2f, 1f, 3f, 4f, 1f))
+        )
+
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(BufferedOutputStream(bytes)).use { out ->
+            out.writeInt(ProjectCodec.MAGIC)
+            out.writeInt(1)
+            out.writeLong(project.id)
+            out.writeLong(project.createdAt)
+            out.writeLong(project.updatedAt)
+            out.writeUTF(project.name)
+            out.writeInt(project.width)
+            out.writeInt(project.height)
+            out.writeInt(project.fps)
+            out.writeInt(project.background)
+            out.writeInt(project.frames.size)
+            for (frame in project.frames) {
+                out.writeLong(frame.id)
+                out.writeInt(frame.hold)
+                out.writeInt(frame.layers.size)
+                for (layer in frame.layers) {
+                    out.writeLong(layer.id)
+                    out.writeUTF(layer.name)
+                    out.writeBoolean(layer.visible)
+                    out.writeFloat(layer.opacity)
+                    out.writeInt(layer.strokes.size)
+                    for (stroke in layer.strokes) {
+                        out.writeByte(stroke.tool.ordinal)
+                        out.writeInt(stroke.color)
+                        out.writeFloat(stroke.width)
+                        out.writeFloat(stroke.opacity)
+                        out.writeInt(stroke.pointCount)
+                        for (v in stroke.points) out.writeFloat(v)
+                    }
+                }
+            }
+        }
+
+        val loaded = ProjectCodec.read(ByteArrayInputStream(bytes.toByteArray()))
+        assertNotNull(loaded)
+        loaded!!
+        assertEquals(project.frames.size, loaded.frames.size)
+        assertEquals(1, loaded.frames[0].layers[0].strokes.size)
+        assertEquals(false, loaded.frames[0].layers[0].locked)
+        assertEquals(null, loaded.frames[0].layers[0].image)
+        assertNotNull(ProjectCodec.readMeta(ByteArrayInputStream(bytes.toByteArray())))
     }
 
     @Test

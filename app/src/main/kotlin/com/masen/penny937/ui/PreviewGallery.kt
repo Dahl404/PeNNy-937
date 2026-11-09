@@ -28,8 +28,10 @@ import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.model.Frame
 import com.masen.penny937.model.Ids
 import com.masen.penny937.model.Layer
+import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.ProjectFactory
+import com.masen.penny937.model.ProjectOps
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
 import com.masen.penny937.ui.components.ChoiceChip
@@ -314,14 +316,70 @@ fun EditorGridPreview() {
     }
 }
 
+@Composable
+private fun referenceModel(enterPlacement: Boolean = false): EditorModel {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    return remember {
+        var project = ProjectFactory.create(
+            name = "Reference study",
+            width = 1080,
+            height = 1920,
+            fps = 12,
+            background = ProjectFactory.backgrounds[0].second
+        )
+        project = ProjectOps.addReferenceLayer(
+            project, 0,
+            ProjectFactory.referenceLayer(
+                "Reference",
+                LayerImage(
+                    file = "preview-ref.png",
+                    sourceWidth = 1200,
+                    sourceHeight = 900,
+                    centerX = 540f,
+                    centerY = 960f,
+                    width = 800f,
+                    height = 600f,
+                    rotation = 8f
+                )
+            )
+        )
+        EditorModel(
+            context = context,
+            store = ProjectStore(context),
+            prefs = Prefs(context),
+            initial = project,
+            scope = scope
+        ).also { model ->
+            model.selectLayer(0)
+            if (enterPlacement) model.beginReposition(model.layer)
+        }
+    }
+}
+
 @Preview(name = "Layers sheet", widthDp = 412, heightDp = 915, showBackground = true)
 @Composable
 fun LayersSheetPreview() {
-    val model = previewModel()
+    val model = referenceModel()
     PennyTheme {
         Box(Modifier.fillMaxSize()) {
-            LayersSheet(visible = true, editor = model, onDismiss = {})
+            LayersSheet(
+                visible = true,
+                editor = model,
+                onImportReference = {},
+                onPositionReference = {},
+                onDismiss = {}
+            )
         }
+    }
+}
+
+@Preview(name = "Reference placement", widthDp = 412, heightDp = 915, showBackground = true)
+@Composable
+fun PlacementPreview() {
+    val model = referenceModel(enterPlacement = true)
+    PennyTheme {
+        EditorScreen(model, {}, {}, {})
     }
 }
 

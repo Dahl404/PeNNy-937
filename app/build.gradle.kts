@@ -10,8 +10,8 @@ android {
     applicationId = "com.masen.penny937"
     minSdk = 26
     targetSdk = 37
-    versionCode = 4
-    versionName = "1.3"
+    versionCode = 5
+    versionName = "1.4"
   }
 
   buildTypes {
@@ -47,6 +47,7 @@ dependencies {
   implementation(composeBom)
 
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.exifinterface)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.viewmodel.compose)

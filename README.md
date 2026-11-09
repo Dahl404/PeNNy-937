@@ -29,6 +29,7 @@ Gradle 9.8.2 (the wrapper handles Gradle).
 | Double tap (finger) | Toggle fit / 2.4× zoom |
 | Tap the active tool | Brush settings |
 | Drag the dots under a frame | Reorder frames in the timeline |
+| Layers → Import reference image | Import, place, scale/rotate and lock a tracing guide |
 | Long-press a frame | Frame actions (duplicate, delete, hold) |
 | Trackpad/mouse (stylus-only off) | Also draws |
 
@@ -41,7 +42,11 @@ frame actions and layers are always available.
   changing the canvas resolution or exporting at another size re-renders from vectors.
 - **Per-frame layers, no cap.** Frames carry their own independent layer stacks.
   Layers can be added, duplicated, hidden, opacity-blended, reordered, merged down,
-  or cleared. The eraser only affects the active layer.
+  locked, or cleared. The eraser only affects the active layer.
+- **Reference images.** Import a photo from Layers; it arrives in a placement mode
+  where you can drag, pinch-scale and rotate it, then locks as a dedicated reference
+  layer on the current frame. Reference layers are guides: they are never drawn on,
+  exported, played back or onion-skinned. Unlock to reposition or delete.
 - **No maximum animation length.** Frames are lazy-rendered in the timeline and
   streamed during export.
 - **Editable canvas.** Width/height 32–4096 px, frame rate 1–60 fps, five paper

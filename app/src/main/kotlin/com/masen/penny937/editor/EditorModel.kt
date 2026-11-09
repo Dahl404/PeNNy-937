@@ -1,16 +1,21 @@
 package com.masen.penny937.editor
 
 import android.content.Context
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.masen.penny937.data.Prefs
 import com.masen.penny937.data.ProjectStore
+import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.export.ExportFormat
 import com.masen.penny937.export.Exporter
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.ProjectOps
 import com.masen.penny937.model.GridStyle
+import com.masen.penny937.model.Ids
+import com.masen.penny937.model.Layer
+import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
@@ -24,6 +29,24 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.min
+
+data class ReferencePlacement(
+    val fileName: String,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val targetFrame: Int,
+    val targetLayerId: Long?,
+    val centerX: Float,
+    val centerY: Float,
+    val width: Float,
+    val height: Float,
+    val rotation: Float = 0f
+) {
+    val isNew: Boolean get() = targetLayerId == null
+}
+
+data class EditorHint(val id: Int, val text: String)
 
 sealed interface ExportState {
     data object Idle : ExportState
@@ -67,6 +90,13 @@ class EditorModel(
         private set
     var shapeKind by mutableStateOf(prefs.shapeKind)
         private set
+    var placement by mutableStateOf<ReferencePlacement?>(null)
+        private set
+    var importingReference by mutableStateOf(false)
+        private set
+    var hint by mutableStateOf<EditorHint?>(null)
+        private set
+    private var hintCounter = 0
 
     var showGestureHint by mutableStateOf(!prefs.hintSeen)
         private set
@@ -115,6 +145,7 @@ class EditorModel(
             h = h * 31 + gridStyle.ordinal
             h = h * 31 + (if (isPlaying) 1 else 0)
             h = h * 31 + previewFrame
+            h = h * 31 + (placement?.hashCode() ?: 0)
             return h
         }
 
@@ -151,6 +182,7 @@ class EditorModel(
     // ---------------------------------------------------------------- strokes
 
     fun ensureLayerVisibleForInk() {
+        if (layer.locked || layer.isReference) return
         if (!layer.visible) {
             project = ProjectOps.updateLayer(project, currentFrame, currentLayer) {
                 it.copy(visible = true)
@@ -167,6 +199,14 @@ class EditorModel(
         val targetFrame = project.frameAt(frameIndex)
         if (layerIndex !in targetFrame.layers.indices) return
         val layer = project.layerAt(frameIndex, layerIndex)
+        if (layer.locked) {
+            showHint("Layer is locked")
+            return
+        }
+        if (layer.isReference) {
+            showHint("Reference layers are not drawable")
+            return
+        }
         var updated = ProjectOps.addStroke(project, frameIndex, layerIndex, stroke)
         if (!layer.visible) {
             updated = ProjectOps.updateLayer(updated, frameIndex, layerIndex) {
@@ -226,6 +266,154 @@ class EditorModel(
         currentLayer = layerIndex.coerceIn(0, f.layers.lastIndex)
         if (isPlaying) stopPlayback()
         scheduleSave()
+    }
+
+    fun showHint(text: String) {
+        hint = EditorHint(++hintCounter, text)
+    }
+
+    fun dismissHint(id: Int) {
+        if (hint?.id == id) hint = null
+    }
+
+    // ------------------------------------------------------------- references
+
+    fun importReference(uri: Uri) {
+        if (placement != null || importingReference) return
+        cancelActiveInk()
+        if (isPlaying) stopPlayback()
+        val targetFrame = currentFrame
+        importingReference = true
+        scope.launch {
+            val imported = withContext(Dispatchers.IO) {
+                ReferenceFiles.import(context, uri)
+            }
+            importingReference = false
+            if (imported == null) {
+                showHint("Could not import that image")
+                return@launch
+            }
+            if (currentFrame != targetFrame) {
+                currentFrame = targetFrame.coerceIn(0, project.frames.lastIndex)
+                currentLayer = currentLayer.coerceIn(0, frame.layers.lastIndex)
+            }
+            val p = project
+            val aspect = imported.width.toFloat() / imported.height.toFloat()
+            val maxW = p.width * 0.7f
+            val maxH = p.height * 0.7f
+            val w = min(maxW, maxH * aspect).coerceAtLeast(16f)
+            val h = (w / aspect).coerceAtLeast(16f)
+            placement = ReferencePlacement(
+                fileName = imported.fileName,
+                sourceWidth = imported.width,
+                sourceHeight = imported.height,
+                targetFrame = targetFrame,
+                targetLayerId = null,
+                centerX = p.width / 2f,
+                centerY = p.height / 2f,
+                width = w,
+                height = h,
+                rotation = 0f
+            )
+        }
+    }
+
+    fun beginReposition(layer: Layer) {
+        val image = layer.image ?: return
+        cancelActiveInk()
+        if (isPlaying) stopPlayback()
+        placement = ReferencePlacement(
+            fileName = image.file,
+            sourceWidth = image.sourceWidth,
+            sourceHeight = image.sourceHeight,
+            targetFrame = currentFrame,
+            targetLayerId = layer.id,
+            centerX = image.centerX,
+            centerY = image.centerY,
+            width = image.width,
+            height = image.height,
+            rotation = image.rotation
+        )
+    }
+
+    fun updatePlacement(
+        centerX: Float,
+        centerY: Float,
+        width: Float,
+        height: Float,
+        rotation: Float
+    ) {
+        val current = placement ?: return
+        val maxWidth = project.width * 4f
+        val newWidth = width.coerceIn(16f, maxWidth)
+        val scale = if (width > 0.001f) newWidth / width else 1f
+        placement = current.copy(
+            centerX = centerX,
+            centerY = centerY,
+            width = newWidth,
+            height = (height * scale).coerceAtLeast(16f),
+            rotation = rotation
+        )
+    }
+
+    fun confirmPlacement() {
+        val current = placement ?: return
+        val image = LayerImage(
+            file = current.fileName,
+            sourceWidth = current.sourceWidth,
+            sourceHeight = current.sourceHeight,
+            centerX = current.centerX,
+            centerY = current.centerY,
+            width = current.width,
+            height = current.height,
+            rotation = current.rotation
+        )
+        val existingId = current.targetLayerId
+        if (existingId == null) {
+            val frameIndex = current.targetFrame.coerceIn(0, project.frames.lastIndex)
+            val frame = project.frameAt(frameIndex)
+            val name = referenceName(frame)
+            val layer = com.masen.penny937.model.ProjectFactory.referenceLayer(name, image)
+            val updated = ProjectOps.addReferenceLayer(project, frameIndex, layer)
+            val selected = if (frameIndex == currentFrame) {
+                (currentLayer + 1).coerceIn(0, updated.frameAt(frameIndex).layers.lastIndex)
+            } else {
+                0
+            }
+            placement = null
+            apply(updated, frameIndex, selected)
+        } else {
+            val frameIndex = current.targetFrame.coerceIn(0, project.frames.lastIndex)
+            val index = project.frameAt(frameIndex).layers.indexOfFirst { it.id == existingId }
+            if (index < 0) {
+                placement = null
+                showHint("That reference layer is gone")
+                return
+            }
+            val updated = ProjectOps.updateLayerImage(project, frameIndex, index, image)
+            placement = null
+            apply(updated, frameIndex, currentLayer)
+        }
+    }
+
+    fun cancelPlacement() {
+        val current = placement ?: return
+        if (current.isNew) ReferenceFiles.delete(current.fileName)
+        placement = null
+    }
+
+    fun setLayerLocked(index: Int, locked: Boolean) {
+        if (index !in frame.layers.indices) return
+        apply(
+            ProjectOps.updateLayer(project, currentFrame, index) {
+                it.copy(locked = locked)
+            }
+        )
+    }
+
+    private fun referenceName(frame: com.masen.penny937.model.Frame): String {
+        val count = frame.layers.count { it.isReference }
+        return if (count == 0) "Reference" else "Reference ${count + 1}"
     }
 
     // ---------------------------------------------------------------- tools
@@ -351,12 +539,21 @@ class EditorModel(
     }
 
     fun deleteLayer() {
+        if (layer.locked) {
+            showHint("Unlock the layer to delete it")
+            return
+        }
         cancelActiveInk()
         val (updated, index) = ProjectOps.deleteLayer(project, currentFrame, currentLayer)
         apply(updated, currentFrame, index)
     }
 
     fun mergeLayerDown() {
+        val lower = frame.layers.getOrNull(currentLayer - 1)
+        if (layer.locked || layer.isReference || lower == null || lower.locked || lower.isReference) {
+            showHint("Locked and reference layers cannot be merged")
+            return
+        }
         cancelActiveInk()
         val (updated, index) = ProjectOps.mergeLayerDown(project, currentFrame, currentLayer)
         apply(updated, currentFrame, index)
@@ -399,6 +596,14 @@ class EditorModel(
     }
 
     fun clearLayer() {
+        if (layer.locked) {
+            showHint("Layer is locked")
+            return
+        }
+        if (layer.isReference) {
+            showHint("Reference layers cannot be cleared")
+            return
+        }
         cancelActiveInk()
         apply(ProjectOps.clearLayer(project, currentFrame, currentLayer))
     }

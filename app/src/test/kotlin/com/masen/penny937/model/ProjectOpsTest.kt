@@ -107,6 +107,49 @@ class ProjectOpsTest {
     }
 
     @Test
+    fun referenceLayerGoesToTheBottomAndIsLocked() {
+        var p = project()
+        val originalId = p.frames[0].layers[0].id
+        val image = LayerImage(
+            file = "ref.png",
+            sourceWidth = 100,
+            sourceHeight = 200,
+            centerX = 50f,
+            centerY = 100f,
+            width = 100f,
+            height = 200f
+        )
+        p = ProjectOps.addReferenceLayer(
+            p, 0, ProjectFactory.referenceLayer("Reference", image)
+        )
+        assertEquals(2, p.frames[0].layers.size)
+        assertTrue(p.frames[0].layers[0].isReference)
+        assertTrue(p.frames[0].layers[0].locked)
+        assertEquals("ref.png", p.frames[0].layers[0].image!!.file)
+        assertEquals(originalId, p.frames[0].layers[1].id)
+        // A blank frame does not copy the reference.
+        p = ProjectOps.addFrameAfter(p, 0)
+        assertEquals(1, p.frames[1].layers.size)
+        assertEquals(null, p.frames[1].layers[0].image)
+    }
+
+    @Test
+    fun lockedOrReferenceLayersDoNotMergeOrClear() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        p = ProjectOps.addStroke(p, 0, 0, stroke(Tool.PEN))
+        p = ProjectOps.addStroke(p, 0, 1, stroke(Tool.PEN))
+        p = ProjectOps.updateLayer(p, 0, 1) { it.copy(locked = true) }
+        val mergeAttempt = ProjectOps.mergeLayerDown(p, 0, 1).first
+        assertEquals(2, mergeAttempt.frames[0].layers.size)
+
+        val image = LayerImage("ref.png", 10, 10, 5f, 5f, 10f, 10f)
+        p = ProjectOps.updateLayer(p, 0, 0) { it.copy(image = image) }
+        val cleared = ProjectOps.clearLayer(p, 0, 0)
+        assertEquals(1, cleared.frames[0].layers[0].strokes.size)
+    }
+
+    @Test
     fun deletingTheLastFrameIsIgnored() {
         val p = project()
         assertEquals(1, ProjectOps.deleteFrame(p, 0).frames.size)

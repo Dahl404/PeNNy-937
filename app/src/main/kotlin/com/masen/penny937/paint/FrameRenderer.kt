@@ -4,8 +4,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
+import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.model.Frame
 import com.masen.penny937.model.Layer
+import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.Project
 import kotlin.math.roundToInt
 
@@ -16,7 +19,8 @@ object FrameRasterizer {
         frame: Frame,
         targetWidth: Int,
         targetHeight: Int,
-        background: Int?
+        background: Int?,
+        includeReferences: Boolean = false
     ): Bitmap {
         val w = targetWidth.coerceAtLeast(1)
         val h = targetHeight.coerceAtLeast(1)
@@ -30,6 +34,7 @@ object FrameRasterizer {
         val compositePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         for (layer in frame.layers) {
             if (!layer.visible || layer.opacity <= 0.002f) continue
+            if (layer.isReference && !includeReferences) continue
             scratch.eraseColor(Color.TRANSPARENT)
             scratchCanvas.save()
             scratchCanvas.scale(sx, sy)
@@ -43,7 +48,25 @@ object FrameRasterizer {
     }
 
     fun renderLayer(canvas: Canvas, layer: Layer) {
+        layer.image?.let { drawReference(canvas, it) }
         for (stroke in layer.strokes) Ink.renderStroke(canvas, stroke)
+    }
+
+    private fun drawReference(canvas: Canvas, image: LayerImage) {
+        val bitmap = ReferenceFiles.bitmap(image.file) ?: return
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        canvas.save()
+        canvas.translate(image.centerX, image.centerY)
+        canvas.rotate(image.rotation)
+        val halfW = image.width / 2f
+        val halfH = image.height / 2f
+        canvas.drawBitmap(
+            bitmap,
+            null,
+            RectF(-halfW, -halfH, halfW, halfH),
+            paint
+        )
+        canvas.restore()
     }
 }
 
@@ -53,7 +76,11 @@ object FrameRasterizer {
  */
 class FrameRenderer {
 
-    private class LayerEntry(var bitmap: Bitmap, var drawnStrokes: Int)
+    private class LayerEntry(
+        var bitmap: Bitmap,
+        var drawnStrokes: Int,
+        var drawnImageHash: Int
+    )
 
     private val layers = LinkedHashMap<Long, LayerEntry>(16, 0.75f, true)
     private var layerBytes = 0L
@@ -73,9 +100,11 @@ class FrameRenderer {
 
     fun editableLayerBitmap(project: Project, layer: Layer): Bitmap {
         val entry = ensureEntry(project, layer)
-        if (entry.drawnStrokes != layer.strokes.size) {
+        val imageHash = layer.image?.hashCode() ?: 0
+        if (entry.drawnStrokes != layer.strokes.size || entry.drawnImageHash != imageHash) {
             renderLayerInto(entry.bitmap, layer)
             entry.drawnStrokes = layer.strokes.size
+            entry.drawnImageHash = imageHash
         }
         return entry.bitmap
     }
@@ -169,7 +198,7 @@ class FrameRenderer {
             invalidateLayer(layer.id)
         }
         val bitmap = Bitmap.createBitmap(project.width, project.height, Bitmap.Config.ARGB_8888)
-        val entry = LayerEntry(bitmap, -1)
+        val entry = LayerEntry(bitmap, -1, Int.MIN_VALUE)
         layers[layer.id] = entry
         layerBytes += bytesOf(bitmap)
         val iterator = layers.entries.iterator()

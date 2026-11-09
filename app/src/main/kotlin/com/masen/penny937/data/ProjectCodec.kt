@@ -2,6 +2,7 @@ package com.masen.penny937.data
 
 import com.masen.penny937.model.Frame
 import com.masen.penny937.model.Layer
+import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
@@ -23,7 +24,8 @@ import java.io.OutputStream
  */
 object ProjectCodec {
     const val MAGIC = 0x50393337
-    const val VERSION = 1
+    const val VERSION = 2
+    const val MIN_VERSION = 1
 
     fun write(project: Project, output: OutputStream) {
         DataOutputStream(BufferedOutputStream(output, 1 shl 16)).use { out ->
@@ -47,6 +49,19 @@ object ProjectCodec {
                     out.writeUTF(layer.name)
                     out.writeBoolean(layer.visible)
                     out.writeFloat(layer.opacity)
+                    out.writeBoolean(layer.locked)
+                    val image = layer.image
+                    out.writeBoolean(image != null)
+                    if (image != null) {
+                        out.writeUTF(image.file)
+                        out.writeInt(image.sourceWidth)
+                        out.writeInt(image.sourceHeight)
+                        out.writeFloat(image.centerX)
+                        out.writeFloat(image.centerY)
+                        out.writeFloat(image.width)
+                        out.writeFloat(image.height)
+                        out.writeFloat(image.rotation)
+                    }
                     out.writeInt(layer.strokes.size)
                     for (stroke in layer.strokes) {
                         out.writeByte(stroke.tool.ordinal)
@@ -64,7 +79,8 @@ object ProjectCodec {
     fun read(input: InputStream): Project? = runCatching {
         DataInputStream(BufferedInputStream(input, 1 shl 16)).use { data ->
             require(data.readInt() == MAGIC) { "Not a PeNNy project" }
-            require(data.readInt() == VERSION) { "Unsupported version" }
+            val version = data.readInt()
+            require(version in MIN_VERSION..VERSION) { "Unsupported version" }
             val id = data.readLong()
             val created = data.readLong()
             val updated = data.readLong()
@@ -85,6 +101,19 @@ object ProjectCodec {
                     val layerName = data.readUTF()
                     val visible = data.readBoolean()
                     val opacity = data.readFloat().coerceIn(0f, 1f)
+                    val locked = if (version >= 2) data.readBoolean() else false
+                    val image = if (version >= 2 && data.readBoolean()) {
+                        LayerImage(
+                            file = data.readUTF(),
+                            sourceWidth = data.readInt(),
+                            sourceHeight = data.readInt(),
+                            centerX = data.readFloat(),
+                            centerY = data.readFloat(),
+                            width = data.readFloat(),
+                            height = data.readFloat(),
+                            rotation = data.readFloat()
+                        )
+                    } else null
                     val strokeCount = data.readInt()
                     val strokes = ArrayList<Stroke>(strokeCount)
                     repeat(strokeCount) {
@@ -97,13 +126,23 @@ object ProjectCodec {
                         for (i in points.indices) points[i] = data.readFloat()
                         strokes.add(Stroke(tool, color, strokeWidth, strokeOpacity, points))
                     }
-                    layers.add(Layer(layerId, layerName, visible, opacity, strokes))
+                    layers.add(
+                        Layer(
+                            id = layerId,
+                            name = layerName,
+                            visible = visible,
+                            opacity = opacity,
+                            locked = locked,
+                            image = image,
+                            strokes = strokes
+                        )
+                    )
                 }
                 frames.add(
                     Frame(
                         id = frameId,
                         hold = hold,
-                        layers = layers.ifEmpty { listOf(Layer(frameId + 1, "Layer 1")) }
+                        layers = layers.ifEmpty { listOf(Layer(id = frameId + 1, name = "Layer 1")) }
                     )
                 )
             }
@@ -118,7 +157,7 @@ object ProjectCodec {
                     listOf(
                         Frame(
                             id = if (id > 0) id else 1L,
-                            layers = listOf(Layer((if (id > 0) id else 1L) + 1, "Layer 1"))
+                            layers = listOf(Layer(id = (if (id > 0) id else 1L) + 1, name = "Layer 1"))
                         )
                     )
                 },
@@ -131,7 +170,7 @@ object ProjectCodec {
     fun readMeta(input: InputStream): ProjectMeta? = runCatching {
         DataInputStream(BufferedInputStream(input)).use { data ->
             require(data.readInt() == MAGIC)
-            require(data.readInt() == VERSION)
+            require(data.readInt() in MIN_VERSION..VERSION)
             val id = data.readLong()
             data.readLong() // createdAt
             val updated = data.readLong()

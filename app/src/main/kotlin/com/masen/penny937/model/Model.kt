@@ -74,16 +74,35 @@ class Stroke(
     fun pointPressure(i: Int): Float = points[i * 3 + 2]
 }
 
+data class LayerImage(
+    val file: String,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+    val centerX: Float,
+    val centerY: Float,
+    val width: Float,
+    val height: Float,
+    val rotation: Float = 0f
+)
+
 data class Layer(
     val id: Long,
     val name: String,
     val visible: Boolean = true,
     val opacity: Float = 1f,
+    val locked: Boolean = false,
+    val image: LayerImage? = null,
     val strokes: List<Stroke> = emptyList()
 ) {
+    val isReference: Boolean get() = image != null
+
     val revision: Int
-        get() = strokes.fold(31 * (if (visible) 7 else 3) + (opacity * 100).toInt()) { acc, s ->
-            acc * 31 + s.pointCount + s.tool.ordinal
+        get() {
+            var h = 31 * (if (visible) 7 else 3) + (opacity * 100).toInt()
+            h = h * 31 + (if (locked) 1 else 0)
+            h = h * 31 + (image?.hashCode() ?: 0)
+            for (s in strokes) h = h * 31 + s.pointCount + s.tool.ordinal
+            return h
         }
 }
 
@@ -207,14 +226,17 @@ object ProjectFactory {
     fun blankFrameLike(frame: Frame, nameIndex: Int): Frame = Frame(
         id = Ids.next(),
         hold = frame.hold,
-        layers = frame.layers.mapIndexed { i, l ->
-            Layer(
-                id = Ids.next(),
-                name = l.name.ifBlank { "Layer ${i + 1}" },
-                visible = l.visible,
-                opacity = l.opacity
-            )
-        }.ifEmpty { listOf(Layer(id = Ids.next(), name = "Layer 1")) }
+        layers = frame.layers
+            .filterNot { it.isReference }
+            .mapIndexed { i, l ->
+                Layer(
+                    id = Ids.next(),
+                    name = l.name.ifBlank { "Layer ${i + 1}" },
+                    visible = l.visible,
+                    opacity = l.opacity
+                )
+            }
+            .ifEmpty { listOf(Layer(id = Ids.next(), name = "Layer 1")) }
     )
 
     fun duplicateFrame(frame: Frame): Frame = Frame(
@@ -226,6 +248,13 @@ object ProjectFactory {
     )
 
     fun newLayer(name: String): Layer = Layer(id = Ids.next(), name = name)
+
+    fun referenceLayer(name: String, image: LayerImage): Layer = Layer(
+        id = Ids.next(),
+        name = name,
+        locked = true,
+        image = image
+    )
 
     fun duplicateProject(project: Project, newName: String = project.name + " copy"): Project {
         val now = System.currentTimeMillis()
@@ -328,8 +357,15 @@ object ProjectOps {
     fun deleteLayer(project: Project, frameIndex: Int, layerIndex: Int): Pair<Project, Int> {
         val frame = project.frameAt(frameIndex)
         if (frame.layers.size <= 1) {
-            val cleared = updateLayer(project, frameIndex, layerIndex) {
-                it.copy(strokes = emptyList(), visible = true, opacity = 1f)
+            val only = frame.layers[layerIndex.coerceIn(0, frame.layers.lastIndex)]
+            val cleared = if (only.isReference) {
+                updateLayer(project, frameIndex, layerIndex) {
+                    Layer(id = it.id, name = "Layer 1")
+                }
+            } else {
+                updateLayer(project, frameIndex, layerIndex) {
+                    it.copy(strokes = emptyList(), visible = true, opacity = 1f)
+                }
             }
             return cleared to layerIndex
         }
@@ -344,6 +380,9 @@ object ProjectOps {
         if (layerIndex <= 0) return project to layerIndex
         val lower = frame.layers[layerIndex - 1]
         val upper = frame.layers[layerIndex]
+        if (lower.locked || upper.locked || lower.image != null || upper.image != null) {
+            return project to layerIndex
+        }
         val merged = lower.copy(
             strokes = lower.strokes + upper.strokes.map { s ->
                 if (s.opacity >= 1f) s
@@ -371,7 +410,22 @@ object ProjectOps {
     }
 
     fun clearLayer(project: Project, frameIndex: Int, layerIndex: Int): Project =
-        updateLayer(project, frameIndex, layerIndex) { it.copy(strokes = emptyList()) }
+        updateLayer(project, frameIndex, layerIndex) {
+            if (it.locked || it.isReference) it else it.copy(strokes = emptyList())
+        }
+
+    /** Inserts a reference image layer at the bottom of a frame. */
+    fun addReferenceLayer(project: Project, frameIndex: Int, layer: Layer): Project =
+        updateFrame(project, frameIndex) { frame ->
+            frame.copy(layers = listOf(layer) + frame.layers)
+        }
+
+    fun updateLayerImage(
+        project: Project,
+        frameIndex: Int,
+        layerIndex: Int,
+        image: LayerImage
+    ): Project = updateLayer(project, frameIndex, layerIndex) { it.copy(image = image) }
 
     fun updateSettings(
         project: Project,

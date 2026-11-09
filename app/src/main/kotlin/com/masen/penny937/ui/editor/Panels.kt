@@ -493,12 +493,22 @@ private fun ShapeChoice(
 }
 
 @Composable
-fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> Unit) {
+fun BoxScope.LayersSheet(
+    visible: Boolean,
+    editor: EditorModel,
+    onImportReference: () -> Unit,
+    onPositionReference: () -> Unit,
+    onDismiss: () -> Unit
+) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val frame = editor.frame
     val layerCount = frame.layers.size
     val indices = remember(frame.layers.size) { frame.layers.indices.reversed().toList() }
+    val selectedLayer = editor.layer
+    val canMerge = editor.currentLayer > 0 &&
+        !selectedLayer.locked && !selectedLayer.isReference &&
+        frame.layers[editor.currentLayer - 1].let { !it.locked && !it.isReference }
 
     PennySheet(
         visible = visible,
@@ -529,6 +539,21 @@ fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                 modifier = Modifier.fillMaxWidth(),
                 icon = PennyIcons.Plus,
                 tint = palette.accent
+            )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Import reference image",
+                onClick = onImportReference,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Image,
+                tint = palette.accent
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "References are locked guides. They are not exported or played.",
+                style = type.caption,
+                color = palette.textTertiary,
+                modifier = Modifier.padding(horizontal = 4.dp)
             )
             Spacer(Modifier.height(10.dp))
             LazyColumn(
@@ -562,7 +587,7 @@ fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                             iconSize = 16.dp,
                             tint = if (layer.visible) palette.textSecondary else palette.textTertiary
                         )
-                        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                        Column(Modifier.weight(1f).padding(horizontal = 3.dp)) {
                             Text(
                                 layer.name,
                                 style = type.label.copy(
@@ -573,11 +598,25 @@ fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                "${layer.strokes.size} strokes · ${(layer.opacity * 100).roundToInt()}%",
+                                buildString {
+                                    if (layer.isReference) append("Reference image")
+                                    else append("${layer.strokes.size} strokes")
+                                    append(" · ${(layer.opacity * 100).roundToInt()}%")
+                                    if (layer.locked) append(" · locked")
+                                },
                                 style = type.caption,
-                                color = palette.textTertiary
+                                color = palette.textTertiary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
+                        PennyIconButton(
+                            icon = if (layer.locked) PennyIcons.Lock else PennyIcons.LockOpen,
+                            onClick = { editor.setLayerLocked(index, !layer.locked) },
+                            size = 28.dp,
+                            iconSize = 14.dp,
+                            tint = if (layer.locked) palette.accent else palette.textTertiary
+                        )
                         PennyIconButton(
                             icon = PennyIcons.ArrowUp,
                             onClick = { editor.selectLayer(index); editor.moveLayerUp() },
@@ -612,6 +651,26 @@ fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                 onValueChange = { editor.setLayerOpacity(it) },
                 valueRange = 0.05f..1f
             )
+            if (selectedLayer.isReference) {
+                Spacer(Modifier.height(10.dp))
+                SecondaryButton(
+                    text = "Position reference",
+                    onClick = onPositionReference,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = PennyIcons.Move,
+                    tint = palette.accent,
+                    enabled = !selectedLayer.locked
+                )
+                if (selectedLayer.locked) {
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        "Unlock the layer to reposition it.",
+                        style = type.caption,
+                        color = palette.textTertiary,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+            }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecondaryButton(
@@ -625,16 +684,18 @@ fun BoxScope.LayersSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                     onClick = { editor.mergeLayerDown() },
                     modifier = Modifier.weight(1f),
                     icon = PennyIcons.ArrowDown,
-                    enabled = editor.currentLayer > 0
+                    enabled = canMerge
                 )
             }
             Spacer(Modifier.height(8.dp))
             SecondaryButton(
-                text = if (layerCount <= 1) "Clear layer" else "Delete layer",
+                text = if (layerCount <= 1 && !selectedLayer.isReference) "Clear layer"
+                else "Delete layer",
                 onClick = { editor.deleteLayer() },
                 modifier = Modifier.fillMaxWidth(),
                 icon = PennyIcons.Trash,
-                tint = palette.danger
+                tint = palette.danger,
+                enabled = !selectedLayer.locked
             )
             Spacer(Modifier.height(6.dp))
         }

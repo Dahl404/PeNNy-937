@@ -1,6 +1,9 @@
 package com.masen.penny937.ui.editor
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -34,10 +37,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -56,6 +61,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -102,14 +108,34 @@ fun EditorScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var canvasView by remember { mutableStateOf<DrawingCanvasView?>(null) }
     var hintVisible by remember { mutableStateOf(editor.showGestureHint) }
+    val placing by remember { derivedStateOf { editor.placement != null } }
+    val pickReference = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) editor.importReference(uri)
+    }
     val hintAlpha by animateFloatAsState(
-        targetValue = if (hintVisible && sheet == EditorSheet.NONE && !editor.isPlaying) 1f else 0f,
+        targetValue = if (
+            hintVisible && sheet == EditorSheet.NONE && !editor.isPlaying &&
+            !placing && editor.hint == null
+        ) 1f else 0f,
         animationSpec = tween(280),
         label = "hint"
     )
 
+    LaunchedEffect(placing) {
+        if (placing) canvasView?.fitToPaper()
+    }
+
+    LaunchedEffect(editor.hint?.id) {
+        val current = editor.hint ?: return@LaunchedEffect
+        delay(2600)
+        editor.dismissHint(current.id)
+    }
+
     BackHandler {
         when {
+            editor.placement != null -> editor.cancelPlacement()
             confirmDelete -> confirmDelete = false
             sheet != EditorSheet.NONE -> sheet = EditorSheet.NONE
             editor.isPlaying -> editor.stopPlayback()
@@ -144,7 +170,12 @@ fun EditorScreen(
 
     Box(Modifier.fillMaxSize().background(palette.background)) {
         Column(Modifier.fillMaxSize()) {
-            if (!editor.isPlaying) {
+            if (placing) {
+                PlacementTopBar(
+                    onCancel = { editor.cancelPlacement() },
+                    onDone = { editor.confirmPlacement() }
+                )
+            } else if (!editor.isPlaying) {
                 EditorTopBar(
                     editor = editor,
                     onBack = onClose,
@@ -159,7 +190,9 @@ fun EditorScreen(
                     onViewCreated = { canvasView = it }
                 )
 
-                if (!editor.isPlaying) {
+                if (placing) {
+                    // The canvas draws the reference placement overlay itself.
+                } else if (!editor.isPlaying) {
                     ToolRail(
                         editor = editor,
                         modifier = Modifier.align(Alignment.CenterStart).padding(start = 10.dp),
@@ -243,8 +276,22 @@ fun EditorScreen(
                         }
                     }
                 }
+                if (editor.importingReference) {
+                    ImportingPill(Modifier.align(Alignment.Center))
+                }
+                val activeHint = editor.hint
+                if (activeHint != null) {
+                    HintPill(
+                        text = activeHint.text,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 18.dp)
+                    )
+                }
             }
-            if (!editor.isPlaying) {
+            if (placing) {
+                PlacementFooter()
+            } else if (!editor.isPlaying) {
                 EditorDock(
                     editor = editor,
                     onLayers = { sheet = EditorSheet.LAYERS },
@@ -263,7 +310,20 @@ fun EditorScreen(
         BrushSheet(visible = sheet == EditorSheet.BRUSH, editor = editor) {
             sheet = EditorSheet.NONE
         }
-        LayersSheet(visible = sheet == EditorSheet.LAYERS, editor = editor) {
+        LayersSheet(
+            visible = sheet == EditorSheet.LAYERS,
+            editor = editor,
+            onImportReference = {
+                sheet = EditorSheet.NONE
+                pickReference.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onPositionReference = {
+                sheet = EditorSheet.NONE
+                editor.beginReposition(editor.layer)
+            }
+        ) {
             sheet = EditorSheet.NONE
         }
         SettingsSheet(visible = sheet == EditorSheet.SETTINGS, editor = editor) {
@@ -298,6 +358,119 @@ fun EditorScreen(
                 confirmDelete = false
                 onDeleteProject()
             }
+        )
+    }
+}
+
+@Composable
+private fun PlacementTopBar(onCancel: () -> Unit, onDone: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val view = LocalView.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PennyIconButton(
+            icon = PennyIcons.Close,
+            onClick = onCancel,
+            size = 38.dp,
+            iconSize = 18.dp,
+            background = palette.surface,
+            contentDescription = "Cancel placement"
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Place reference",
+                style = type.headline,
+                color = palette.textPrimary,
+                maxLines = 1
+            )
+            Text(
+                "Drag to move · pinch to scale & rotate",
+                style = type.caption,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(palette.accent)
+                .clickable {
+                    PennyHaptics.tap(view)
+                    onDone()
+                }
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            Text(
+                "Done",
+                style = type.label.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlacementFooter() {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(palette.surfaceSunken)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                PennyIcons.Image,
+                contentDescription = null,
+                tint = palette.textSecondary,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "References are guides · not exported or played",
+                style = type.caption,
+                color = palette.textSecondary
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImportingPill(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.68f))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            color = Color.White,
+            strokeWidth = 2.dp
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            "Importing reference…",
+            style = LocalPennyType.current.caption,
+            color = Color.White
         )
     }
 }

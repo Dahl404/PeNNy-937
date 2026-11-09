@@ -621,6 +621,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             TipRow("Slide the onion control left for a blue ghost of the last frame, right for a red ghost of the next. Centre is off.")
             TipRow("Drag the dots under a frame to rearrange the timeline; long-press a frame for its options.")
             TipRow("Every frame has its own unlimited layers.")
+            TipRow("Import a reference image from Layers, drag to place, pinch to scale and rotate. It locks itself and is never exported.")
             TipRow("Line, rectangle, square, ellipse and circle are one drag away.")
             TipRow("Grid and thirds guides live in the canvas corner.")
             TipRow("Canvas size, frame rate and paper are yours to choose.")
@@ -628,7 +629,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.3 · Made for stylus and patience",
+                "Version 1.4 · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
             )

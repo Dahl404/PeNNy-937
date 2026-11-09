@@ -206,7 +206,12 @@ fun SecondaryButton(
         horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
         if (icon != null) {
-            Icon(icon, null, modifier = Modifier.size(17.dp), tint = tint)
+            Icon(
+                icon,
+                null,
+                modifier = Modifier.size(17.dp),
+                tint = if (enabled) tint else palette.textTertiary
+            )
         }
         Text(text, style = type.label, color = if (enabled) tint else palette.textTertiary)
     }

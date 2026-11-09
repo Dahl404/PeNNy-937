@@ -14,7 +14,9 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.editor.EditorModel
+import com.masen.penny937.editor.ReferencePlacement
 import com.masen.penny937.model.GridStyle
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.ShapeKind
@@ -24,9 +26,13 @@ import com.masen.penny937.paint.Ink
 import com.masen.penny937.paint.Shapes
 import com.masen.penny937.paint.StrokeInker
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * Stylus-first drawing surface.
@@ -126,6 +132,26 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var lastTapY = 0f
     private var suppressUntilUp = false
     private var animator: ValueAnimator? = null
+
+    private enum class PlaceMode { NONE, ONE, TWO }
+
+    private var placeMode = PlaceMode.NONE
+    private var placePointer = -1
+    private var placeLastX = 0f
+    private var placeLastY = 0f
+    private var placePointerA = -1
+    private var placePointerB = -1
+    private var placeStartSpan = 1f
+    private var placeStartAngle = 0f
+    private var placeStartMidX = 0f
+    private var placeStartMidY = 0f
+    private var placeStartCenterX = 0f
+    private var placeStartCenterY = 0f
+    private var placeStartWidth = 0f
+    private var placeStartHeight = 0f
+    private var placeStartRotation = 0f
+    private var placeAnchorLocalX = 0f
+    private var placeAnchorLocalY = 0f
 
     private enum class Mode { NONE, DRAW, SHAPE, PAN, PINCH }
 
@@ -249,9 +275,11 @@ class DrawingCanvasView @JvmOverloads constructor(
             canvas.drawBitmap(preview, null, bitmapRect, layerPaint)
         } else {
             val drawingOnActive = editing && inker != null
+            val placingLayerId = model.placement?.targetLayerId
             for (i in frame.layers.indices) {
                 val layer = frame.layers[i]
                 if (!layer.visible || layer.opacity <= 0.003f) continue
+                if (layer.id == placingLayerId) continue
                 val bitmap = model.renderer.editableLayerBitmap(project, layer)
                 layerPaint.alpha = (layer.opacity * 255f).toInt().coerceIn(0, 255)
                 canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
@@ -271,6 +299,7 @@ class DrawingCanvasView @JvmOverloads constructor(
             if (model.gridEnabled) drawGrid(canvas, model, project)
             val preview = shapePreview
             if (preview != null) Ink.renderStroke(canvas, preview)
+            model.placement?.let { drawPlacement(canvas, it) }
         }
 
         canvas.restoreToCount(save)
@@ -278,10 +307,11 @@ class DrawingCanvasView @JvmOverloads constructor(
         borderPaint.color = if (darkTheme) Color.argb(40, 255, 255, 255) else Color.argb(30, 0, 0, 0)
         canvas.drawRoundRect(paperRect, radius, radius, borderPaint)
 
-        if (editing && hoverVisible) drawCursor(canvas, model)
+        if (editing && hoverVisible && model.placement == null) drawCursor(canvas, model)
     }
 
     private fun drawOnionSkins(canvas: Canvas, model: EditorModel, project: Project, frameIndex: Int) {
+        if (model.placement != null) return
         val strength = model.onionStrength
         if (kotlin.math.abs(strength) < 0.01f) return
         val dir = if (strength < 0f) -1 else 1
@@ -369,6 +399,10 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val model = editor ?: return false
+        if (model.placement != null) {
+            handlePlacementTouch(event, model)
+            return true
+        }
         if (model.isPlaying || previewFrameIndex >= 0) return true
 
         when (event.actionMasked) {
@@ -602,6 +636,16 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private fun beginStroke(event: MotionEvent, index: Int, eraserOverride: Boolean) {
         val model = editor ?: return
+        if (model.layer.locked) {
+            model.showHint("Layer is locked")
+            mode = Mode.NONE
+            return
+        }
+        if (model.layer.isReference) {
+            model.showHint("Reference layers are not drawable")
+            mode = Mode.NONE
+            return
+        }
         if (model.tool == Tool.SHAPE && !eraserOverride) {
             beginShape(event, index, model)
             return
@@ -785,6 +829,179 @@ class DrawingCanvasView @JvmOverloads constructor(
         shapeStartY = 0f
         shapeCurrentX = 0f
         shapeCurrentY = 0f
+    }
+
+    private fun drawPlacement(canvas: Canvas, placement: ReferencePlacement) {
+        val bitmap = ReferenceFiles.bitmap(placement.fileName)
+        val halfW = placement.width / 2f
+        val halfH = placement.height / 2f
+        canvas.save()
+        canvas.translate(placement.centerX, placement.centerY)
+        canvas.rotate(placement.rotation)
+        if (bitmap != null) {
+            val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            canvas.drawBitmap(
+                bitmap,
+                null,
+                RectF(-halfW, -halfH, halfW, halfH),
+                imagePaint
+            )
+        } else {
+            val missing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = Color.argb(38, 10, 132, 255)
+            }
+            canvas.drawRect(-halfW, -halfH, halfW, halfH, missing)
+        }
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.6f / scale
+            color = Color.argb(230, 10, 132, 255)
+        }
+        canvas.drawRect(-halfW, -halfH, halfW, halfH, outline)
+        val handle = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(240, 10, 132, 255)
+        }
+        val r = 4.5f / scale
+        for (x in floatArrayOf(-halfW, halfW)) {
+            for (y in floatArrayOf(-halfH, halfH)) {
+                canvas.drawCircle(x, y, r, handle)
+            }
+        }
+        canvas.restore()
+    }
+
+    private fun handlePlacementTouch(event: MotionEvent, model: EditorModel) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                placeMode = PlaceMode.ONE
+                placePointer = event.getPointerId(0)
+                placeLastX = event.x
+                placeLastY = event.y
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.pointerCount >= 2) {
+                    beginPlacementPinch(event, model)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                when (placeMode) {
+                    PlaceMode.ONE -> {
+                        val index = event.findPointerIndex(placePointer)
+                        if (index >= 0) {
+                            val dx = event.getX(index) - placeLastX
+                            val dy = event.getY(index) - placeLastY
+                            placeLastX = event.getX(index)
+                            placeLastY = event.getY(index)
+                            val placement = model.placement
+                            if (placement != null) {
+                                model.updatePlacement(
+                                    centerX = placement.centerX + dx / scale,
+                                    centerY = placement.centerY + dy / scale,
+                                    width = placement.width,
+                                    height = placement.height,
+                                    rotation = placement.rotation
+                                )
+                                invalidate()
+                            }
+                        }
+                    }
+                    PlaceMode.TWO -> updatePlacementPinch(event, model)
+                    PlaceMode.NONE -> Unit
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val lifted = event.getPointerId(event.actionIndex)
+                if (placeMode == PlaceMode.TWO) {
+                    if (event.pointerCount - 1 < 2) {
+                        val remaining = (0 until event.pointerCount)
+                            .firstOrNull { event.getPointerId(it) != lifted }
+                        if (remaining != null) {
+                            placeMode = PlaceMode.ONE
+                            placePointer = event.getPointerId(remaining)
+                            placeLastX = event.getX(remaining)
+                            placeLastY = event.getY(remaining)
+                        } else {
+                            placeMode = PlaceMode.NONE
+                        }
+                    }
+                } else if (placeMode == PlaceMode.ONE && lifted == placePointer) {
+                    placeMode = PlaceMode.NONE
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> placeMode = PlaceMode.NONE
+        }
+    }
+
+    private fun beginPlacementPinch(event: MotionEvent, model: EditorModel) {
+        val placement = model.placement ?: return
+        val a = 0
+        val b = 1
+        placePointerA = event.getPointerId(a)
+        placePointerB = event.getPointerId(b)
+        placeMode = PlaceMode.TWO
+        placeStartSpan = spanOf(event, a, b).coerceAtLeast(1f)
+        placeStartAngle = atan2(
+            (event.getY(b) - event.getY(a)).toDouble(),
+            (event.getX(b) - event.getX(a)).toDouble()
+        ).toFloat()
+        placeStartMidX = (event.getX(a) + event.getX(b)) * 0.5f
+        placeStartMidY = (event.getY(a) + event.getY(b)) * 0.5f
+        placeStartCenterX = placement.centerX
+        placeStartCenterY = placement.centerY
+        placeStartWidth = placement.width
+        placeStartHeight = placement.height
+        placeStartRotation = placement.rotation
+        val midWorldX = toProjectX(placeStartMidX)
+        val midWorldY = toProjectY(placeStartMidY)
+        val rad = (-placement.rotation * Math.PI / 180.0).toFloat()
+        val dx = midWorldX - placement.centerX
+        val dy = midWorldY - placement.centerY
+        placeAnchorLocalX = dx * cos(rad) - dy * sin(rad)
+        placeAnchorLocalY = dx * sin(rad) + dy * cos(rad)
+    }
+
+    private fun updatePlacementPinch(event: MotionEvent, model: EditorModel) {
+        val a = event.findPointerIndex(placePointerA)
+        val b = event.findPointerIndex(placePointerB)
+        if (a < 0 || b < 0) return
+        val span = spanOf(event, a, b).coerceAtLeast(1f)
+        val angle = atan2(
+            (event.getY(b) - event.getY(a)).toDouble(),
+            (event.getX(b) - event.getX(a)).toDouble()
+        ).toFloat()
+        val minFactor = 16f / placeStartWidth.coerceAtLeast(1f)
+        val maxFactor = (editor?.project?.width ?: 1080) * 4f / placeStartWidth.coerceAtLeast(1f)
+        val factor = (span / placeStartSpan).coerceIn(minFactor, maxFactor)
+        var rotation = placeStartRotation + Math.toDegrees((angle - placeStartAngle).toDouble()).toFloat()
+        rotation = normalizeAngle(rotation)
+        val snapped = (rotation / 90f).roundToInt() * 90f
+        if (abs(rotation - snapped) < 4f) rotation = snapped
+        val midX = (event.getX(a) + event.getX(b)) * 0.5f
+        val midY = (event.getY(a) + event.getY(b)) * 0.5f
+        val midWorldX = toProjectX(midX)
+        val midWorldY = toProjectY(midY)
+        val rad = (rotation * Math.PI / 180.0).toFloat()
+        val anchorX = placeAnchorLocalX * factor
+        val anchorY = placeAnchorLocalY * factor
+        val offsetX = anchorX * cos(rad) - anchorY * sin(rad)
+        val offsetY = anchorX * sin(rad) + anchorY * cos(rad)
+        model.updatePlacement(
+            centerX = midWorldX - offsetX,
+            centerY = midWorldY - offsetY,
+            width = placeStartWidth * factor,
+            height = placeStartHeight * factor,
+            rotation = rotation
+        )
+        invalidate()
+    }
+
+    private fun normalizeAngle(angle: Float): Float {
+        var a = angle % 360f
+        if (a > 180f) a -= 360f
+        if (a <= -180f) a += 360f
+        return a
     }
 
     private fun inkCanvas(): Canvas? = if (strokeIsMarker) {

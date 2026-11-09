@@ -81,6 +81,11 @@ frame actions and layers are always available.
 
 ## Export
 
+- MP4 video (H.264 via MediaCodec, AAC-free). Frames are rasterised on worker
+  threads, converted to YUV 4:2:0 and streamed into a MediaMuxer, so memory stays
+  flat no matter how long the animation is. Frame holds become real durations, the
+  output is even-dimensioned, and the bitrate is picked from the pixel count
+  (~0.12 bits/pixel/frame). Output widths 480 / 720 / full.
 - Animated GIF, written by a dependency-free encoder with per-frame median-cut
   palettes and Floyd–Steinberg dithering. Output widths 480 / 720 / full.
 - PNG frame sequence (zip) with an `about.txt`.
@@ -153,7 +158,7 @@ app/src/main/kotlin/com/masen/penny937/
   model/          Project, Frame, Layer, Stroke, immutable edits
   data/           project store (binary format), prefs
   paint/          stroke smoothing, grain, layer bitmap renderer, rasterizer
-  export/         GIF/LZW/quantizer, PNG exports
+  export/         GIF/LZW/quantizer, MP4 encoder, PNG exports
   editor/         EditorModel (tools, frames, layers, undo, autosave, export)
   ui/             Apple-flavoured Compose UI, canvas view, sheets, icons
 ```

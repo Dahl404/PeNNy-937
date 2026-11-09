@@ -20,9 +20,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 enum class ExportFormat(val label: String, val mime: String) {
+    MP4("MP4 video", "video/mp4"),
     GIF("GIF", "image/gif"),
     PNG_SEQUENCE("PNG frames", "application/zip"),
-    CURRENT_FRAME("Still frame", "image/png")
+    CURRENT_FRAME("Still frame", "image/png");
+
+    /** Formats that render the whole timeline and offer an output-width choice. */
+    val isTimeline: Boolean get() = this == MP4 || this == GIF
 }
 
 object Exporter {
@@ -50,11 +54,13 @@ object Exporter {
         val stamp = System.currentTimeMillis()
         val base = sanitize(project.name)
         val file = when (format) {
+            ExportFormat.MP4 -> File(dir, "$base-$stamp.mp4")
             ExportFormat.GIF -> File(dir, "$base-$stamp.gif")
             ExportFormat.PNG_SEQUENCE -> File(dir, "$base-$stamp.zip")
             ExportFormat.CURRENT_FRAME -> File(dir, "$base-frame-${currentFrame + 1}-$stamp.png")
         }
         when (format) {
+            ExportFormat.MP4 -> VideoExporter.export(project, file, targetWidth, onProgress)
             ExportFormat.GIF -> exportGif(project, file, targetWidth, onProgress)
             ExportFormat.PNG_SEQUENCE -> exportPngZip(project, file, onProgress)
             ExportFormat.CURRENT_FRAME -> exportStill(project, currentFrame, file, onProgress)

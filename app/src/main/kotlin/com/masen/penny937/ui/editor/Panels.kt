@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.editor.ExportState
 import com.masen.penny937.export.ExportFormat
+import com.masen.penny937.export.VideoPlan
 import com.masen.penny937.model.GridStyle
 import com.masen.penny937.model.ProjectFactory
 import com.masen.penny937.model.ShapeKind
@@ -77,6 +78,7 @@ import com.masen.penny937.ui.icons.shapeIcon
 import com.masen.penny937.ui.theme.LocalPenny
 import com.masen.penny937.ui.theme.LocalPennyType
 import androidx.compose.ui.platform.LocalContext
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -982,10 +984,16 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
     val context = LocalContext.current
     val palette = LocalPenny.current
     val type = LocalPennyType.current
-    var format by remember { mutableStateOf(ExportFormat.GIF) }
+    var format by remember { mutableStateOf(ExportFormat.MP4) }
     var scale by remember { mutableIntStateOf(720) }
     val state = editor.exportState
     val project = editor.project
+    val videoPlan = remember(project.width, project.height, scale, format) {
+        if (format == ExportFormat.MP4) {
+            val width = if (scale <= 0) project.width else min(scale, project.width)
+            VideoPlan.dimensions(project, width)
+        } else null
+    }
     val targetWidth = if (format == ExportFormat.CURRENT_FRAME) project.width
     else if (scale <= 0) project.width else kotlin.math.min(scale, project.width)
 
@@ -999,24 +1007,26 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
     ) {
         Column {
             SegmentedControl(
-                options = listOf("GIF", "Frames", "Still"),
+                options = listOf("MP4", "GIF", "Frames", "Still"),
                 selectedIndex = when (format) {
-                    ExportFormat.GIF -> 0
-                    ExportFormat.PNG_SEQUENCE -> 1
-                    ExportFormat.CURRENT_FRAME -> 2
+                    ExportFormat.MP4 -> 0
+                    ExportFormat.GIF -> 1
+                    ExportFormat.PNG_SEQUENCE -> 2
+                    ExportFormat.CURRENT_FRAME -> 3
                 },
                 onSelect = {
                     if (editor.exportState is ExportState.Running) editor.cancelExport()
                     format = when (it) {
-                        0 -> ExportFormat.GIF
-                        1 -> ExportFormat.PNG_SEQUENCE
+                        0 -> ExportFormat.MP4
+                        1 -> ExportFormat.GIF
+                        2 -> ExportFormat.PNG_SEQUENCE
                         else -> ExportFormat.CURRENT_FRAME
                     }
                     editor.dismissExport()
                 },
                 modifier = Modifier.fillMaxWidth()
             )
-            if (format == ExportFormat.GIF) {
+            if (format.isTimeline) {
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceChip(
@@ -1047,6 +1057,7 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                 Column {
                     Text(
                         when (format) {
+                            ExportFormat.MP4 -> "H.264 video. Plays anywhere, including Photos and messages."
                             ExportFormat.GIF -> "Animated GIF with per-frame palettes and dithering."
                             ExportFormat.PNG_SEQUENCE -> "A zip of lossless PNG frames — the best master copy."
                             ExportFormat.CURRENT_FRAME -> "The current frame as a lossless PNG."
@@ -1057,6 +1068,10 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                     Spacer(Modifier.height(4.dp))
                     Text(
                         when (format) {
+                            ExportFormat.MP4 -> {
+                                val (w, h) = videoPlan ?: (project.width to project.height)
+                                "Output $w × $h px at ${project.fps} fps · ${String.format("%.1f", project.durationSeconds)}s"
+                            }
                             ExportFormat.GIF -> "Output ${targetWidth} px wide · timing quantized to 1/100s"
                             ExportFormat.PNG_SEQUENCE -> "Output ${project.width} × ${project.height} px per frame"
                             ExportFormat.CURRENT_FRAME -> "${project.width} × ${project.height} px"
@@ -1089,6 +1104,7 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                     }
                     PrimaryButton(
                         text = when (format) {
+                            ExportFormat.MP4 -> "Export MP4"
                             ExportFormat.GIF -> "Export GIF"
                             ExportFormat.PNG_SEQUENCE -> "Export PNG frames"
                             ExportFormat.CURRENT_FRAME -> "Export still"

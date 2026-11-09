@@ -31,6 +31,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -48,6 +49,14 @@ data class ReferencePlacement(
 ) {
     val isNew: Boolean get() = targetLayerId == null
 }
+
+/** A live, uncommitted translation of one layer's contents. */
+data class LayerShiftState(
+    val frameIndex: Int,
+    val layerId: Long,
+    val dx: Float = 0f,
+    val dy: Float = 0f
+)
 
 data class EditorHint(val id: Int, val text: String)
 
@@ -107,6 +116,8 @@ class EditorModel(
     var shapeKind by mutableStateOf(prefs.shapeKind)
         private set
     var placement by mutableStateOf<ReferencePlacement?>(null)
+        private set
+    var layerShift by mutableStateOf<LayerShiftState?>(null)
         private set
     var importingReference by mutableStateOf(false)
         private set
@@ -247,6 +258,7 @@ class EditorModel(
 
     fun undo() {
         cancelActiveInk()
+        cancelLayerShift()
         clearVideoRange()
         renderer.invalidateComposites()
         val snap = undoStack.removeLastOrNull() ?: return
@@ -259,6 +271,7 @@ class EditorModel(
 
     fun redo() {
         cancelActiveInk()
+        cancelLayerShift()
         clearVideoRange()
         renderer.invalidateComposites()
         val snap = redoStack.removeLastOrNull() ?: return
@@ -524,6 +537,61 @@ class EditorModel(
         placement = null
     }
 
+    // -------------------------------------------------------------- layer shift
+
+    /**
+     * Starts a free translation of the selected layer. The layer is not changed
+     * until [commitLayerShift], so a whole drag is one undoable edit and cancel
+     * leaves the project untouched.
+     */
+    fun beginLayerShift() {
+        if (placement != null || importingReference || videoImport != null) return
+        if (eyedropper != null) cancelEyedropper()
+        val target = layer
+        if (target.locked) {
+            showHint("Unlock the layer to shift it")
+            return
+        }
+        if (!target.visible) {
+            showHint("Make the layer visible to shift it")
+            return
+        }
+        cancelActiveInk()
+        if (isPlaying) stopPlayback()
+        layerShift = LayerShiftState(
+            frameIndex = currentFrame,
+            layerId = target.id
+        )
+    }
+
+    fun updateLayerShift(dx: Float, dy: Float) {
+        val current = layerShift ?: return
+        layerShift = current.copy(dx = current.dx + dx, dy = current.dy + dy)
+    }
+
+    fun commitLayerShift() {
+        val current = layerShift ?: return
+        layerShift = null
+        if (abs(current.dx) < 0.01f && abs(current.dy) < 0.01f) return
+        val frame = project.frameAt(current.frameIndex)
+        val index = frame.layers.indexOfFirst { it.id == current.layerId }
+        if (index < 0) return
+        val target = frame.layers[index]
+        if (target.strokes.isEmpty() && target.image == null) return
+        val updated = ProjectOps.translateLayer(
+            project, current.frameIndex, index, current.dx, current.dy
+        )
+        if (updated === project) return
+        // The cached bitmap still shows the old position.
+        renderer.invalidateLayer(current.layerId)
+        renderer.invalidateComposites()
+        apply(updated, current.frameIndex, index)
+    }
+
+    fun cancelLayerShift() {
+        if (layerShift != null) layerShift = null
+    }
+
     fun setLayerLocked(index: Int, locked: Boolean) {
         if (index !in frame.layers.indices) return
         apply(
@@ -672,6 +740,7 @@ class EditorModel(
     fun selectFrame(index: Int) {
         if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
+        cancelLayerShift()
         currentFrame = index.coerceIn(0, project.frames.lastIndex)
         currentLayer = currentLayer.coerceIn(0, frame.layers.lastIndex)
         if (isPlaying) stopPlayback()
@@ -679,6 +748,7 @@ class EditorModel(
 
     fun selectLayer(index: Int) {
         if (eyedropper != null) cancelEyedropper()
+        cancelLayerShift()
         currentLayer = index.coerceIn(0, frame.layers.lastIndex)
     }
 

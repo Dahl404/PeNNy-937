@@ -72,6 +72,19 @@ class Stroke(
     fun pointX(i: Int): Float = points[i * 3]
     fun pointY(i: Int): Float = points[i * 3 + 1]
     fun pointPressure(i: Int): Float = points[i * 3 + 2]
+
+    /** Returns a copy whose points are moved by [dx], [dy] project pixels. */
+    fun translated(dx: Float, dy: Float): Stroke {
+        if (dx == 0f && dy == 0f) return this
+        val moved = points.copyOf()
+        var i = 0
+        while (i < moved.size) {
+            moved[i] += dx
+            moved[i + 1] += dy
+            i += 3
+        }
+        return Stroke(tool, color, width, opacity, moved)
+    }
 }
 
 data class LayerImage(
@@ -412,6 +425,24 @@ object ProjectOps {
     fun clearLayer(project: Project, frameIndex: Int, layerIndex: Int): Project =
         updateLayer(project, frameIndex, layerIndex) {
             if (it.locked || it.isReference) it else it.copy(strokes = emptyList())
+        }
+
+    /** Moves every stroke and the reference placement of one layer by [dx], [dy]. */
+    fun translateLayer(
+        project: Project,
+        frameIndex: Int,
+        layerIndex: Int,
+        dx: Float,
+        dy: Float
+    ): Project =
+        updateLayer(project, frameIndex, layerIndex) { layer ->
+            if (dx == 0f && dy == 0f) layer
+            else layer.copy(
+                image = layer.image?.let {
+                    it.copy(centerX = it.centerX + dx, centerY = it.centerY + dy)
+                },
+                strokes = layer.strokes.map { it.translated(dx, dy) }
+            )
         }
 
     data class VideoInsertResult(

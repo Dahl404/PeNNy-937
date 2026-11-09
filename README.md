@@ -30,6 +30,7 @@ Gradle 9.8.2 (the wrapper handles Gradle).
 | Sliders button in the tool rail | Brush / shape settings |
 | Drag the handle under a frame | Reorder frames in the timeline |
 | Layers → Import reference image | Import, place, scale/rotate and lock a tracing guide |
+| Layers → Shift layer | Drag on the canvas to move a layer's ink and reference |
 | Long-press a frame | Frame actions (duplicate, delete, hold) |
 | Plus in the transport | Add a blank frame |
 | Trackpad/mouse (stylus-only off) | Also draws |
@@ -42,8 +43,11 @@ frame actions and layers are always available.
 - **Everything is vector.** Strokes are stored as smoothed point + pressure triples;
   changing the canvas resolution or exporting at another size re-renders from vectors.
 - **Per-frame layers, no cap.** Frames carry their own independent layer stacks.
-  Layers can be added, duplicated, hidden, opacity-blended, reordered, merged down,
-  locked, or cleared. The eraser only affects the active layer.
+  Layers can be added, duplicated, hidden, opacity-blended, reordered, shifted,
+  merged down, locked, or cleared. The eraser only affects the active layer.
+- **Shift any layer.** Open Layers and choose *Shift layer* to drag the selected
+  layer's strokes and reference image on the canvas as one unit. Done applies the
+  move as a single undoable edit; cancel leaves it untouched.
 - **Reference images.** Import a photo from Layers; it arrives in a placement mode
   where you can drag, pinch-scale and rotate it, then locks as a dedicated reference
   layer on the current frame. Reference layers are guides: they are never drawn on,

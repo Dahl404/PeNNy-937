@@ -158,6 +158,10 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var placeAnchorLocalX = 0f
     private var placeAnchorLocalY = 0f
 
+    private var shiftPointer = -1
+    private var shiftLastX = 0f
+    private var shiftLastY = 0f
+
     private enum class Mode { NONE, DRAW, SHAPE, PAN, PINCH }
 
     fun bind(model: EditorModel, revision: Int = 0) {
@@ -285,6 +289,7 @@ class DrawingCanvasView @JvmOverloads constructor(
             val drawingOnActive = editing && inker != null
             val placingLayerId = model.placement?.targetLayerId
             val pickingLayerId = model.eyedropper?.layerId
+            val shift = model.layerShift
             for (i in frame.layers.indices) {
                 val layer = frame.layers[i]
                 val isPicked = pickingLayerId == layer.id
@@ -301,6 +306,11 @@ class DrawingCanvasView @JvmOverloads constructor(
                     pickingLayerId == null || isPicked -> layer.opacity
                     else -> layer.opacity * 0.18f
                 }
+                val shiftLayer = shift?.takeIf {
+                    it.frameIndex == frameIndex && it.layerId == layer.id
+                }
+                val layerSave = if (shiftLayer != null) canvas.save() else -1
+                if (shiftLayer != null) canvas.translate(shiftLayer.dx, shiftLayer.dy)
                 layerPaint.alpha = (displayOpacity * 255f).toInt().coerceIn(0, 255)
                 canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
 
@@ -312,6 +322,7 @@ class DrawingCanvasView @JvmOverloads constructor(
                         canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
                     }
                 }
+                if (shiftLayer != null) canvas.restoreToCount(layerSave)
             }
         }
 
@@ -424,6 +435,10 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val model = editor ?: return false
+        if (model.layerShift != null) {
+            handleLayerShiftTouch(event, model)
+            return true
+        }
         if (model.placement != null) {
             handlePlacementTouch(event, model)
             return true
@@ -1010,6 +1025,27 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
         }
         canvas.restore()
+    }
+
+    private fun handleLayerShiftTouch(event: MotionEvent, model: EditorModel) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                shiftPointer = event.getPointerId(0)
+                shiftLastX = event.x
+                shiftLastY = event.y
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val index = event.findPointerIndex(shiftPointer)
+                if (index < 0) return
+                val dx = (event.getX(index) - shiftLastX) / scale
+                val dy = (event.getY(index) - shiftLastY) / scale
+                shiftLastX = event.getX(index)
+                shiftLastY = event.getY(index)
+                model.updateLayerShift(dx, dy)
+                invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> shiftPointer = -1
+        }
     }
 
     private fun handlePlacementTouch(event: MotionEvent, model: EditorModel) {

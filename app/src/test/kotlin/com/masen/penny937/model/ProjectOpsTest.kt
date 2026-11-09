@@ -86,7 +86,36 @@ class ProjectOpsTest {
     }
 
     @Test
-    fun moveFrameReordersTheTimeline() {
+    fun translateLayerMovesItsStrokesAndLeavesOtherLayersAlone() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        val original = stroke()
+        p = ProjectOps.addStroke(p, 0, 0, original)
+        p = ProjectOps.addStroke(p, 0, 1, stroke(Tool.MARKER))
+        val image = LayerImage("ref.png", 10, 10, 50f, 60f, 10f, 10f)
+        p = ProjectOps.updateLayer(p, 0, 1) { it.copy(image = image) }
+
+        val moved = ProjectOps.translateLayer(p, 0, 0, 12f, -7f)
+        val movedStroke = moved.frames[0].layers[0].strokes[0]
+        assertEquals(22f, movedStroke.pointX(0), 0.001f)
+        assertEquals(3f, movedStroke.pointY(0), 0.001f)
+        assertEquals(32f, movedStroke.pointX(1), 0.001f)
+        assertEquals(13f, movedStroke.pointY(1), 0.001f)
+        assertEquals(0.5f, movedStroke.pointPressure(1), 0.001f)
+
+        // The original snapshot and the other layer stay put.
+        assertEquals(10f, p.frames[0].layers[0].strokes[0].pointX(0), 0.001f)
+        val other = moved.frames[0].layers[1]
+        assertEquals(10f, other.strokes[0].pointX(0), 0.001f)
+        assertEquals(50f, other.image!!.centerX, 0.001f)
+
+        val shiftedReference = ProjectOps.translateLayer(moved, 0, 1, -5f, 6f)
+        assertEquals(45f, shiftedReference.frames[0].layers[1].image!!.centerX, 0.001f)
+        assertEquals(66f, shiftedReference.frames[0].layers[1].image!!.centerY, 0.001f)
+    }
+
+    @Test
+    fun movingFrameReordersTheTimeline() {
         var p = project()
         p = ProjectOps.addFrameAfter(p, 0)
         p = ProjectOps.addFrameAfter(p, 1)

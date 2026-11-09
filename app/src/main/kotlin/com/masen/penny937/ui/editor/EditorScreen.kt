@@ -111,6 +111,7 @@ fun EditorScreen(
     var canvasView by remember { mutableStateOf<DrawingCanvasView?>(null) }
     var hintVisible by remember { mutableStateOf(editor.showGestureHint) }
     val placing by remember { derivedStateOf { editor.placement != null } }
+    val shifting by remember { derivedStateOf { editor.layerShift != null } }
     val picking by remember { derivedStateOf { editor.eyedropper != null } }
     val pickReference = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -125,14 +126,14 @@ fun EditorScreen(
     val hintAlpha by animateFloatAsState(
         targetValue = if (
             hintVisible && sheet == EditorSheet.NONE && !editor.isPlaying &&
-            !placing && !picking && editor.hint == null
+            !placing && !shifting && !picking && editor.hint == null
         ) 1f else 0f,
         animationSpec = tween(280),
         label = "hint"
     )
 
-    LaunchedEffect(placing) {
-        if (placing) canvasView?.fitToPaper()
+    LaunchedEffect(placing, shifting) {
+        if (placing || shifting) canvasView?.fitToPaper()
     }
 
     LaunchedEffect(editor.hint?.id) {
@@ -146,6 +147,10 @@ fun EditorScreen(
             editor.videoImport != null -> editor.cancelVideoImport()
             editor.eyedropper != null -> editor.cancelEyedropper()
             editor.placement != null -> editor.cancelPlacement()
+            editor.layerShift != null -> {
+                editor.cancelLayerShift()
+                canvasView?.invalidate()
+            }
             confirmDelete -> confirmDelete = false
             sheet != EditorSheet.NONE -> sheet = EditorSheet.NONE
             editor.isPlaying -> editor.stopPlayback()
@@ -187,6 +192,14 @@ fun EditorScreen(
                     onCancel = { editor.cancelPlacement() },
                     onDone = { editor.confirmPlacement() }
                 )
+            } else if (shifting) {
+                ShiftTopBar(
+                    onCancel = {
+                        editor.cancelLayerShift()
+                        canvasView?.invalidate()
+                    },
+                    onDone = { editor.commitLayerShift() }
+                )
             } else if (!editor.isPlaying) {
                 EditorTopBar(
                     editor = editor,
@@ -206,6 +219,8 @@ fun EditorScreen(
                     // Picking mode is canvas-only; the top bar and footer explain it.
                 } else if (placing) {
                     // The canvas draws the reference placement overlay itself.
+                } else if (shifting) {
+                    // The canvas moves the selected layer directly while dragging.
                 } else if (!editor.isPlaying) {
                     ToolRail(
                         editor = editor,
@@ -307,6 +322,8 @@ fun EditorScreen(
                 EyedropperFooter()
             } else if (placing) {
                 PlacementFooter()
+            } else if (shifting) {
+                ShiftFooter()
             } else if (!editor.isPlaying) {
                 EditorDock(
                     editor = editor,
@@ -351,6 +368,10 @@ fun EditorScreen(
             onPositionReference = {
                 sheet = EditorSheet.NONE
                 editor.beginReposition(editor.layer)
+            },
+            onShiftLayer = {
+                sheet = EditorSheet.NONE
+                editor.beginLayerShift()
             }
         ) {
             sheet = EditorSheet.NONE
@@ -618,6 +639,96 @@ private fun PlacementTopBar(onCancel: () -> Unit, onDone: () -> Unit) {
                 "Done",
                 style = type.label.copy(fontWeight = FontWeight.SemiBold),
                 color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShiftTopBar(onCancel: () -> Unit, onDone: () -> Unit) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val view = LocalView.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PennyIconButton(
+            icon = PennyIcons.Close,
+            onClick = onCancel,
+            size = 38.dp,
+            iconSize = 18.dp,
+            background = palette.surface,
+            contentDescription = "Cancel shift"
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Shift layer",
+                style = type.headline,
+                color = palette.textPrimary,
+                maxLines = 1
+            )
+            Text(
+                "Drag to move · Done to apply",
+                style = type.caption,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(palette.accent)
+                .clickable {
+                    PennyHaptics.tap(view)
+                    onDone()
+                }
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            Text(
+                "Done",
+                style = type.label.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShiftFooter() {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(palette.surfaceSunken)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                PennyIcons.Move,
+                contentDescription = null,
+                tint = palette.textSecondary,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "Moves every stroke and reference on this layer",
+                style = type.caption,
+                color = palette.textSecondary
             )
         }
     }
@@ -1106,6 +1217,18 @@ private fun EditorDock(
                         contentDescription = "Next frame"
                     )
                     Spacer(Modifier.weight(1f))
+                    PennyIconButton(
+                        icon = PennyIcons.Copy,
+                        onClick = {
+                            PennyHaptics.tap(view)
+                            editor.duplicateFrame()
+                        },
+                        size = 34.dp,
+                        iconSize = 17.dp,
+                        tint = palette.textSecondary,
+                        contentDescription = "Duplicate frame"
+                    )
+                    Spacer(Modifier.width(2.dp))
                     PennyIconButton(
                         icon = PennyIcons.Plus,
                         onClick = onAddFrame,

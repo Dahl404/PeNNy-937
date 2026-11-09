@@ -520,6 +520,7 @@ fun BoxScope.LayersSheet(
     onImportReference: () -> Unit,
     onImportVideo: () -> Unit,
     onPositionReference: () -> Unit,
+    onShiftLayer: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val palette = LocalPenny.current
@@ -683,6 +684,24 @@ fun BoxScope.LayersSheet(
                 onValueChange = { editor.setLayerOpacity(it) },
                 valueRange = 0.05f..1f
             )
+            Spacer(Modifier.height(10.dp))
+            SecondaryButton(
+                text = "Shift layer",
+                onClick = onShiftLayer,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Move,
+                tint = palette.accent,
+                enabled = !selectedLayer.locked
+            )
+            if (selectedLayer.locked && !selectedLayer.isReference) {
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    "Unlock the layer to shift its contents.",
+                    style = type.caption,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
             if (selectedLayer.isReference) {
                 Spacer(Modifier.height(10.dp))
                 SecondaryButton(

@@ -389,6 +389,7 @@ fun LayersSheetPreview() {
                 onImportReference = {},
                 onImportVideo = {},
                 onPositionReference = {},
+                onShiftLayer = {},
                 onDismiss = {}
             )
         }

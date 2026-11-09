@@ -37,8 +37,9 @@ import kotlin.math.sin
 /**
  * Stylus-first drawing surface.
  *
- * - Pressure-sensitive, smoothed ink rendered incrementally into a layer bitmap.
- * - Markers are buffered so translucent strokes never double up at their joints.
+ * - Pressure-sensitive, smoothed ink drawn as one ribbon outline per stroke.
+ * - The live stroke is buffered in a scratch bitmap and blended into the layer once,
+ *   so translucent ink never doubles up and the eraser can preview without damage.
  * - Two fingers (or palm-sized contacts) navigate; pen-sized contacts draw.
  * - Pinch to zoom, double-tap to toggle fit.
  */
@@ -77,7 +78,6 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val markerCompositePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val clipPath = Path()
     private val paperRect = RectF()
@@ -98,9 +98,13 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var activeLayerId = -1L
     private var strokeFrameIndex = -1
     private var activeBitmap: Bitmap? = null
-    private var markerBitmap: Bitmap? = null
-    private var markerOpacity = 1f
-    private var strokeIsMarker = false
+    private var overlayBitmap: Bitmap? = null
+    private var overlayCanvas: Canvas? = null
+    private var strokeOpacity = 1f
+    private var strokeTool = Tool.PEN
+    private val strokeBounds = RectF()
+    private val strokeRect = android.graphics.Rect()
+    private val overlayCompositePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
     private var shapeKind = ShapeKind.LINE
     private var shapeStartX = 0f
@@ -314,13 +318,8 @@ class DrawingCanvasView @JvmOverloads constructor(
                 layerPaint.alpha = (displayOpacity * 255f).toInt().coerceIn(0, 255)
                 canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
 
-                if (drawingOnActive && i == activeLayerIndex && strokeIsMarker) {
-                    val overlay = markerBitmap
-                    if (overlay != null) {
-                        layerPaint.alpha =
-                            (markerOpacity * layer.opacity * 255f).toInt().coerceIn(0, 255)
-                        canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
-                    }
+                if (drawingOnActive && i == activeLayerIndex) {
+                    drawLiveStroke(canvas, layer.opacity)
                 }
                 if (shiftLayer != null) canvas.restoreToCount(layerSave)
             }
@@ -809,26 +808,23 @@ class DrawingCanvasView @JvmOverloads constructor(
         val layer = model.layer
         val activeTool = if (eraserOverride) Tool.ERASER else model.tool
         drawPointerToolType = event.getToolType(index)
-        strokeIsMarker = activeTool == Tool.MARKER && !eraserOverride
-        markerOpacity = model.markerOpacity
+        strokeTool = activeTool
+        strokeOpacity = if (activeTool == Tool.MARKER) model.markerOpacity else 1f
         activeLayerIndex = model.currentLayer
         activeLayerId = layer.id
         strokeFrameIndex = model.currentFrame
         activeBitmap = model.renderer.editableLayerBitmap(project, layer)
-        val width = model.size
         inker = StrokeInker(
             tool = activeTool,
             color = model.color,
-            baseWidth = width,
-            opacity = if (activeTool == Tool.MARKER) markerOpacity else 1f,
+            baseWidth = model.size,
+            opacity = strokeOpacity,
             pressureEnabled = model.pressureEnabled
         )
-        if (strokeIsMarker) {
-            markerBitmap = model.renderer.markerOverlay(project)
-            model.renderer.clearMarkerOverlay()
-        } else {
-            markerBitmap = null
-        }
+        val scratch = model.renderer.inkOverlay(project)
+        model.renderer.clearInkOverlay()
+        overlayBitmap = scratch
+        overlayCanvas = Canvas(scratch)
         model.ensureLayerVisibleForInk()
         mode = Mode.DRAW
         addSample(event, index)
@@ -940,18 +936,17 @@ class DrawingCanvasView @JvmOverloads constructor(
             resetStroke()
             return
         }
-        val overlay = markerBitmap
-        if (strokeIsMarker) {
-            val overlayCanvas = overlay?.let { Canvas(it) } ?: Canvas(bitmap)
-            active.finish(overlayCanvas)
-            if (overlay != null) {
-                val layerCanvas = Canvas(bitmap)
-                markerCompositePaint.alpha = (markerOpacity * 255f).toInt().coerceIn(0, 255)
-                layerCanvas.drawBitmap(overlay, 0f, 0f, markerCompositePaint)
-            }
-            model.renderer.clearMarkerOverlay()
-        } else {
-            active.finish(Canvas(bitmap))
+        val overlay = overlayBitmap
+        val scratchCanvas = overlayCanvas
+        if (overlay != null && scratchCanvas != null) {
+            active.finish(scratchCanvas)
+            active.bounds(strokeBounds)
+            strokeBounds.roundOut(strokeRect)
+            // src == dst: copy just the stroke's rectangle of the scratch bitmap.
+            Canvas(bitmap).drawBitmap(
+                overlay, strokeRect, strokeRect, Ink.compositePaintFor(strokeTool, strokeOpacity)
+            )
+            model.renderer.clearInkOverlay()
         }
         val stroke = active.snapshot()
         if (stroke.pointCount > 0 && strokeFrameIndex >= 0) {
@@ -972,7 +967,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         val bitmap = activeBitmap
         if (bitmap != null) {
             editor?.renderer?.invalidateLayer(activeLayerId)
-            editor?.renderer?.clearMarkerOverlay()
+            editor?.renderer?.clearInkOverlay()
         }
         resetStroke()
         invalidate()
@@ -1180,20 +1175,43 @@ class DrawingCanvasView @JvmOverloads constructor(
         return a
     }
 
-    private fun inkCanvas(): Canvas? = if (strokeIsMarker) {
-        markerBitmap?.let { Canvas(it) }
-    } else {
-        activeBitmap?.let { Canvas(it) }
+    private fun inkCanvas(): Canvas? = overlayCanvas
+
+    /** Blends the buffered live stroke over the layer bitmap being edited. */
+    private fun drawLiveStroke(canvas: Canvas, layerOpacity: Float) {
+        val overlay = overlayBitmap ?: return
+        if (strokeTool == Tool.ERASER) {
+            // Cut the buffered mask out of this layer only: draw it into an isolated
+            // layer, then knock the mask out, so lower layers stay untouched.
+            val save = canvas.save()
+            canvas.clipRect(strokeBounds)
+            canvas.saveLayer(
+                strokeBounds.left, strokeBounds.top,
+                strokeBounds.right, strokeBounds.bottom,
+                null
+            )
+            activeBitmap?.let { canvas.drawBitmap(it, 0f, 0f, layerPaint) }
+            overlayCompositePaint.alpha = 255
+            overlayCompositePaint.xfermode =
+                android.graphics.PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            canvas.drawBitmap(overlay, 0f, 0f, overlayCompositePaint)
+            overlayCompositePaint.xfermode = null
+            canvas.restoreToCount(save)
+        } else {
+            layerPaint.alpha = (strokeOpacity * layerOpacity * 255f).toInt().coerceIn(0, 255)
+            canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
+            layerPaint.alpha = 255
+        }
     }
 
     private fun resetStroke() {
         inker = null
         activeBitmap = null
-        markerBitmap = null
+        overlayBitmap = null
+        overlayCanvas = null
         activeLayerIndex = -1
         activeLayerId = -1L
         strokeFrameIndex = -1
-        strokeIsMarker = false
     }
 
     // ------------------------------------------------------------------ misc

@@ -87,6 +87,64 @@ frame actions and layers are always available.
 - Current frame as PNG.
 - Files are written to the app cache and shared through the system share sheet.
 
+## Performance
+
+Everything below is measured, not guessed. The bench harness lives in
+`app/src/test/kotlin/com/masen/penny937/perf/` and runs on the JVM with Robolectric's
+native Skia, so it measures the real `android.graphics` paths:
+
+```bash
+source ~/.local/opt/android-env.sh
+./gradlew testDebugUnitTest --tests '*RenderBenchTest*'
+./gradlew testDebugUnitTest --tests '*InkFidelityTest*'   # ink must not change
+./gradlew testDebugUnitTest --tests '*StrokerPipelineTest*'
+./gradlew testDebugUnitTest --tests '*RasterizePathTest*'
+```
+
+90 strokes x 120 points, timings in ms (desktop JVM, so phones are slower in
+absolute terms but the ratios hold):
+
+| Work | Before | After |
+| --- | --- | --- |
+| Rasterise one frame @1080 | 117 | 34 |
+| Rasterise one frame @480 | 95 | 26 |
+| Timeline thumbnail @104 | 46 | 17 |
+| Live ink, per motion event @1080 | ~0.4 | 0.48 (one ribbon fill) |
+| GIF: quantise 480x480 (flat art) | 5.0 | 5.0 |
+| GIF: quantise 480x480 (noisy photo) | 52 | 23 |
+| GIF: LZW 480x480 | 5.8 | 1.6 |
+| GIF export, 24 frames @480 | 452 | 125 |
+| Project save (5400 strokes) | 33 | 12 |
+| Project load (5400 strokes) | 34 | 19 |
+
+What changed:
+
+- **One path per stroke.** Ink is now a filled ribbon outline (per-segment offsets
+  with round joins and caps) instead of hundreds of `drawLine` stamps with a
+  different width each. This was ~70% of frame rendering, thumbnail rendering and
+  export time.
+- **Live ink is buffered.** The stroke under the pen is drawn opaque into a scratch
+  bitmap and composited once on lift, so translucent ink never darkens at joints and
+  the preview is pixel-identical to the committed stroke. The eraser buffers a mask
+  and cuts out through `DST_OUT` in an isolated layer.
+- **Single-layer fast path.** Frames with one opaque, eraser-free layer render
+  straight into the output bitmap, skipping a full-size scratch bitmap and composite.
+- **Exports fan out.** Frames are rasterised, quantised and LZW-compressed on all
+  cores in bounded batches; only the byte stream stays ordered.
+- **Palette + LZW.** Median cut uses counting sort over 5-bit channels on primitive
+  arrays, the 32768-entry nearest-colour table comes from a k-d tree instead of a
+  256-way scan, and LZW uses an open-addressed dictionary instead of a boxed
+  `HashMap`.
+- **Cheap bookkeeping.** Frame/layer render revisions, total ticks and the canvas
+  repaint key are cached instead of being recomputed by walking every frame, layer
+  and stroke; playback frame lookup is a binary search.
+- **Binary project I/O** packs its own bytes (2.8x faster saves) while staying
+  byte-compatible with the existing format.
+
+A language switch was considered and rejected: with the geometry batched into one
+Skia call per stroke the remaining cost is Skia rasterisation and memory traffic,
+which an NDK port would not remove.
+
 ## Layout
 
 ```

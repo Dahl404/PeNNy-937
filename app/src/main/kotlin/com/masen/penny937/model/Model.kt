@@ -109,14 +109,18 @@ data class Layer(
 ) {
     val isReference: Boolean get() = image != null
 
-    val revision: Int
-        get() {
-            var h = 31 * (if (visible) 7 else 3) + (opacity * 100).toInt()
-            h = h * 31 + (if (locked) 1 else 0)
-            h = h * 31 + (image?.hashCode() ?: 0)
-            for (s in strokes) h = h * 31 + s.pointCount + s.tool.ordinal
-            return h
-        }
+    /**
+     * Cheap identity for the rendered result of this layer. Cached because the
+     * canvas and the timeline thumbnails read it while composing, and computing it
+     * meant walking every stroke of every layer each time.
+     */
+    val revision: Int by lazy {
+        var h = 31 * (if (visible) 7 else 3) + (opacity * 100).toInt()
+        h = h * 31 + (if (locked) 1 else 0)
+        h = h * 31 + (image?.hashCode() ?: 0)
+        for (s in strokes) h = h * 31 + s.pointCount + s.tool.ordinal
+        h
+    }
 }
 
 data class Frame(
@@ -124,10 +128,11 @@ data class Frame(
     val hold: Int = 1,
     val layers: List<Layer>
 ) {
-    val revision: Int
-        get() = layers.fold(17 * hold) { acc, l ->
+    val revision: Int by lazy {
+        layers.fold(17 * hold) { acc, l ->
             ((acc * 31 + l.revision) * 31 + l.id.hashCode())
         }
+    }
 
     val strokeCount: Int get() = layers.sumOf { it.strokes.size }
 }
@@ -143,24 +148,37 @@ data class Project(
     val createdAt: Long,
     val updatedAt: Long
 ) {
-    val totalTicks: Int get() = frames.sumOf { it.hold }
+    val totalTicks: Int by lazy { frames.sumOf { it.hold } }
 
     val durationSeconds: Float get() = totalTicks.toFloat() / fps
 
+    /** First tick covered by each frame; built once and binary-searched. */
+    private val tickStarts: IntArray by lazy {
+        val starts = IntArray(frames.size)
+        var t = 0
+        for (i in frames.indices) {
+            starts[i] = t
+            t += frames[i].hold
+        }
+        starts
+    }
+
+    /** Playback asks for this on every displayed frame, so it must not scan. */
     fun frameIndexAtTick(tick: Int): Int {
         if (frames.isEmpty()) return 0
-        var remaining = tick.coerceIn(0, max(0, totalTicks - 1))
-        for (i in frames.indices) {
-            remaining -= frames[i].hold
-            if (remaining < 0) return i
+        val clamped = tick.coerceIn(0, max(0, totalTicks - 1))
+        var low = 0
+        var high = frames.size - 1
+        while (low < high) {
+            val mid = (low + high + 1) ushr 1
+            if (tickStarts[mid] <= clamped) low = mid else high = mid - 1
         }
-        return frames.lastIndex
+        return low
     }
 
     fun tickOfFrame(index: Int): Int {
-        var t = 0
-        for (i in 0 until index.coerceAtMost(frames.size)) t += frames[i].hold
-        return t
+        if (frames.isEmpty()) return 0
+        return tickStarts[index.coerceIn(0, frames.lastIndex)]
     }
 
     fun frameAt(index: Int): Frame = frames[index.coerceIn(0, frames.lastIndex)]

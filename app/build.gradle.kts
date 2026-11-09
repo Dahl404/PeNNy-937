@@ -36,6 +36,11 @@ android {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
   }
+
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
+    unitTests.all { it.maxHeapSize = "2g" }
+  }
 }
 
 kotlin {
@@ -61,4 +66,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
 
   testImplementation(libs.junit)
+  testImplementation(libs.robolectric)
 }

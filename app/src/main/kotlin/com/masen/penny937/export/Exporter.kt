@@ -5,13 +5,18 @@ import android.graphics.Bitmap
 import com.masen.penny937.model.Project
 import com.masen.penny937.paint.FrameRasterizer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 enum class ExportFormat(val label: String, val mime: String) {
@@ -21,6 +26,14 @@ enum class ExportFormat(val label: String, val mime: String) {
 }
 
 object Exporter {
+
+    /** Frames are independent, so rasterising and encoding runs on several cores. */
+    private val frameParallelism: Int
+        get() = parallelismOverride
+            ?: Runtime.getRuntime().availableProcessors().coerceIn(1, 6)
+
+    /** Test hook: pin the worker count to measure serial vs parallel exports. */
+    internal var parallelismOverride: Int? = null
 
     suspend fun export(
         context: Context,
@@ -49,6 +62,14 @@ object Exporter {
         file
     }
 
+    /**
+     * Renders and encodes frames on all available cores, writing the GIF in order.
+     *
+     * Encoding a frame is independent of every other frame, so the CPU-bound part
+     * (vector rasterisation, palette quantisation, LZW) fans out; only the byte
+     * stream stays serial. Frames are produced in bounded batches so a 3000-frame
+     * export never buffers more than a couple of dozen encoded frames.
+     */
     private suspend fun exportGif(
         project: Project,
         file: File,
@@ -57,18 +78,37 @@ object Exporter {
     ) {
         val width = targetWidth.coerceIn(64, project.width)
         val height = (width.toFloat() * project.height / project.width).roundToInt().coerceAtLeast(1)
+        val frames = project.frames
         FileOutputStream(file).use { fos ->
             val gif = GifWriter(BufferedOutputStream(fos, 1 shl 16), width, height, loop = true)
-            val pixels = IntArray(width * height)
-            project.frames.forEachIndexed { index, frame ->
-                val bitmap = FrameRasterizer.rasterize(
-                    project, frame, width, height, project.background
-                )
-                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-                bitmap.recycle()
-                val delay = max(1, (100 * frame.hold.toFloat() / project.fps).roundToInt())
-                gif.addFrame(pixels, delay)
-                onProgress((index + 1).toFloat() / project.frames.size)
+            var written = 0
+            var index = 0
+            val batch = frameParallelism * 2
+            while (index < frames.size) {
+                val end = min(index + batch, frames.size)
+                val encoded = coroutineScope {
+                    (index until end).map { i ->
+                        async(Dispatchers.Default) {
+                            val frame = frames[i]
+                            val bitmap = FrameRasterizer.rasterize(
+                                project, frame, width, height, project.background
+                            )
+                            val pixels = IntArray(width * height)
+                            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                            bitmap.recycle()
+                            val quantized = FrameQuantizer().quantize(pixels, width, height, 256)
+                            val blocks = LzwEncoder().compress(quantized.indices)
+                            val delay = max(1, (100 * frame.hold.toFloat() / project.fps).roundToInt())
+                            Pair(GifWriter.EncodedFrame(quantized.palette, blocks), delay)
+                        }
+                    }.awaitAll()
+                }
+                for ((frame, delay) in encoded) {
+                    gif.addEncodedFrame(frame, delay)
+                    written++
+                }
+                onProgress(written.toFloat() / frames.size)
+                index = end
             }
             gif.close()
         }
@@ -79,6 +119,7 @@ object Exporter {
         file: File,
         onProgress: suspend (Float) -> Unit
     ) {
+        val frames = project.frames
         FileOutputStream(file).use { fos ->
             ZipOutputStream(BufferedOutputStream(fos, 1 shl 16)).use { zip ->
                 val info = buildString {
@@ -92,15 +133,33 @@ object Exporter {
                 zip.putNextEntry(ZipEntry("about.txt"))
                 zip.write(info.toByteArray())
                 zip.closeEntry()
-                project.frames.forEachIndexed { index, frame ->
-                    val bitmap = FrameRasterizer.rasterize(
-                        project, frame, project.width, project.height, project.background
-                    )
-                    zip.putNextEntry(ZipEntry("frame_%05d.png".format(index + 1)))
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, zip)
-                    zip.closeEntry()
-                    bitmap.recycle()
-                    onProgress((index + 1).toFloat() / project.frames.size)
+                var written = 0
+                var index = 0
+                val batch = frameParallelism * 2
+                while (index < frames.size) {
+                    val end = min(index + batch, frames.size)
+                    val pngs = coroutineScope {
+                        (index until end).map { i ->
+                            async(Dispatchers.Default) {
+                                val bitmap = FrameRasterizer.rasterize(
+                                    project, frames[i], project.width, project.height,
+                                    project.background
+                                )
+                                val bytes = ByteArrayOutputStream(1 shl 16)
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)
+                                bitmap.recycle()
+                                bytes.toByteArray()
+                            }
+                        }.awaitAll()
+                    }
+                    pngs.forEachIndexed { offset, bytes ->
+                        zip.putNextEntry(ZipEntry("frame_%05d.png".format(index + offset + 1)))
+                        zip.write(bytes)
+                        zip.closeEntry()
+                        written++
+                    }
+                    onProgress(written.toFloat() / frames.size)
+                    index = end
                 }
             }
         }

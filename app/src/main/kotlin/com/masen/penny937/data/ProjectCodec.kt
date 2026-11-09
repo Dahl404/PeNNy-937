@@ -6,10 +6,8 @@ import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
-import java.io.BufferedInputStream
-import java.io.BufferedOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
+import java.io.Closeable
+import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -28,7 +26,7 @@ object ProjectCodec {
     const val MIN_VERSION = 1
 
     fun write(project: Project, output: OutputStream) {
-        DataOutputStream(BufferedOutputStream(output, 1 shl 16)).use { out ->
+        ProjectBytes.Out(output).use { out ->
             out.writeInt(MAGIC)
             out.writeInt(VERSION)
             out.writeLong(project.id)
@@ -69,7 +67,7 @@ object ProjectCodec {
                         out.writeFloat(stroke.width)
                         out.writeFloat(stroke.opacity)
                         out.writeInt(stroke.pointCount)
-                        for (v in stroke.points) out.writeFloat(v)
+                        out.writeFloats(stroke.points, stroke.points.size)
                     }
                 }
             }
@@ -77,7 +75,7 @@ object ProjectCodec {
     }
 
     fun read(input: InputStream): Project? = runCatching {
-        DataInputStream(BufferedInputStream(input, 1 shl 16)).use { data ->
+        ProjectBytes.In(input).use { data ->
             require(data.readInt() == MAGIC) { "Not a PeNNy project" }
             val version = data.readInt()
             require(version in MIN_VERSION..VERSION) { "Unsupported version" }
@@ -168,7 +166,7 @@ object ProjectCodec {
     }.getOrNull()
 
     fun readMeta(input: InputStream): ProjectMeta? = runCatching {
-        DataInputStream(BufferedInputStream(input)).use { data ->
+        ProjectBytes.In(input).use { data ->
             require(data.readInt() == MAGIC)
             require(data.readInt() in MIN_VERSION..VERSION)
             val id = data.readLong()
@@ -193,4 +191,168 @@ object ProjectCodec {
             )
         }
     }.getOrNull()
+}
+
+/**
+ * Minimal big-endian byte plumbing for the project format.
+ *
+ * `DataOutputStream.writeFloat` costs four buffered-write calls per component, and a
+ * stroke holds three components per point: a large project was spending most of its
+ * save time in call overhead rather than I/O. These helpers pack into one byte array
+ * per 64 KiB chunk instead, and stay format-compatible with DataInputStream.
+ */
+internal object ProjectBytes {
+
+    class Out(private val out: OutputStream) : Closeable {
+        private var buf = ByteArray(1 shl 16)
+        private var pos = 0
+
+        private fun ensure(n: Int) {
+            if (pos + n > buf.size) {
+                out.write(buf, 0, pos)
+                pos = 0
+            }
+        }
+
+        fun writeByte(v: Int) {
+            ensure(1)
+            buf[pos++] = v.toByte()
+        }
+
+        fun writeBoolean(v: Boolean) = writeByte(if (v) 1 else 0)
+
+        fun writeInt(v: Int) {
+            ensure(4)
+            buf[pos++] = (v ushr 24).toByte()
+            buf[pos++] = (v ushr 16).toByte()
+            buf[pos++] = (v ushr 8).toByte()
+            buf[pos++] = v.toByte()
+        }
+
+        fun writeLong(v: Long) {
+            writeInt((v ushr 32).toInt())
+            writeInt(v.toInt())
+        }
+
+        fun writeFloat(v: Float) = writeInt(java.lang.Float.floatToRawIntBits(v))
+
+        /** Modified UTF-8, byte-for-byte compatible with DataOutputStream.writeUTF. */
+        fun writeUTF(s: String) {
+            var length = 0
+            for (ch in s) {
+                length += if (ch.code < 0x80) 1 else if (ch.code < 0x800) 2 else 3
+            }
+            if (length > 65535) throw IllegalArgumentException("string too long")
+            ensure(2 + length)
+            buf[pos++] = (length ushr 8).toByte()
+            buf[pos++] = length.toByte()
+            for (ch in s) {
+                val c = ch.code
+                when {
+                    c < 0x80 -> buf[pos++] = c.toByte()
+                    c < 0x800 -> {
+                        buf[pos++] = (0xC0 or (c shr 6)).toByte()
+                        buf[pos++] = (0x80 or (c and 0x3F)).toByte()
+                    }
+                    else -> {
+                        buf[pos++] = (0xE0 or (c shr 12)).toByte()
+                        buf[pos++] = (0x80 or ((c shr 6) and 0x3F)).toByte()
+                        buf[pos++] = (0x80 or (c and 0x3F)).toByte()
+                    }
+                }
+            }
+        }
+
+        /** Bulk write of a point array keeps the per-stroke hot path tight. */
+        fun writeFloats(values: FloatArray, count: Int) {
+            var i = 0
+            while (i < count) {
+                writeFloat(values[i])
+                i++
+            }
+        }
+
+        override fun close() {
+            if (pos > 0) out.write(buf, 0, pos)
+            pos = 0
+            out.flush()
+        }
+    }
+
+    class In(private val input: InputStream) : Closeable {
+        private val buf = ByteArray(1 shl 16)
+        private var pos = 0
+        private var limit = 0
+
+        private fun fill(n: Int) {
+            if (limit - pos >= n) return
+            var remaining = limit - pos
+            if (remaining > 0) System.arraycopy(buf, pos, buf, 0, remaining)
+            pos = 0
+            limit = remaining
+            while (limit < n) {
+                val read = input.read(buf, limit, buf.size - limit)
+                if (read < 0) throw EOFException()
+                limit += read
+            }
+        }
+
+        fun readByte(): Int {
+            fill(1)
+            return buf[pos++].toInt() and 0xFF
+        }
+
+        fun readBoolean(): Boolean = readByte() != 0
+
+        fun readInt(): Int {
+            fill(4)
+            val v = ((buf[pos].toInt() and 0xFF) shl 24) or
+                ((buf[pos + 1].toInt() and 0xFF) shl 16) or
+                ((buf[pos + 2].toInt() and 0xFF) shl 8) or
+                (buf[pos + 3].toInt() and 0xFF)
+            pos += 4
+            return v
+        }
+
+        fun readLong(): Long {
+            val hi = readInt().toLong()
+            val lo = readInt().toLong() and 0xFFFFFFFFL
+            return (hi shl 32) or lo
+        }
+
+        fun readFloat(): Float = java.lang.Float.intBitsToFloat(readInt())
+
+        fun readUTF(): String {
+            val length = (readByte() shl 8) or readByte()
+            fill(length)
+            val chars = StringBuilder(length)
+            var i = 0
+            while (i < length) {
+                val a = buf[pos + i].toInt() and 0xFF
+                when {
+                    a and 0x80 == 0 -> {
+                        chars.append(a.toChar())
+                        i += 1
+                    }
+                    a and 0xE0 == 0xC0 -> {
+                        val b = buf[pos + i + 1].toInt() and 0x3F
+                        chars.append((((a and 0x1F) shl 6) or b).toChar())
+                        i += 2
+                    }
+                    else -> {
+                        val b = buf[pos + i + 1].toInt() and 0x3F
+                        val c = buf[pos + i + 2].toInt() and 0x3F
+                        chars.append((((a and 0x0F) shl 12) or (b shl 6) or c).toChar())
+                        i += 3
+                    }
+                }
+            }
+            pos += length
+            return chars.toString()
+        }
+
+        override fun close() {
+            input.close()
+        }
+    }
 }

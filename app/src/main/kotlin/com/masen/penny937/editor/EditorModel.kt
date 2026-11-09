@@ -157,12 +157,21 @@ class EditorModel(
      * composable scope keeps the canvas repainting while the onion slider,
      * grid, frame, layer, ink or playback state changes.
      */
+    /**
+     * Bumped whenever the project itself changes. Compose reads [canvasRevision] on
+     * every recomposition, so it must be O(1): it used to walk every frame and layer.
+     */
+    private var projectEpoch by mutableStateOf(0)
+
+    private fun touchProject() {
+        projectEpoch++
+    }
+
     val canvasRevision: Int
         get() {
-            var h = project.updatedAt.hashCode()
+            var h = projectEpoch
+            h = h * 31 + project.updatedAt.hashCode()
             h = h * 31 + project.frames.size
-            h = h * 31 + project.frames.sumOf { it.layers.size }
-            h = h * 31 + project.frames.sumOf { it.strokeCount }
             h = h * 31 + project.width
             h = h * 31 + project.height
             h = h * 31 + project.background
@@ -222,6 +231,7 @@ class EditorModel(
             project = ProjectOps.updateLayer(project, currentFrame, currentLayer) {
                 it.copy(visible = true)
             }
+            touchProject()
         }
     }
 
@@ -284,6 +294,7 @@ class EditorModel(
 
     private fun restore(snap: Snapshot) {
         project = snap.project
+        touchProject()
         currentFrame = snap.frame.coerceIn(0, project.frames.lastIndex)
         currentLayer = snap.layer.coerceIn(0, project.frameAt(currentFrame).layers.lastIndex)
         if (isPlaying) stopPlayback()
@@ -305,6 +316,7 @@ class EditorModel(
     ) {
         if (recordUndo) pushUndo()
         project = newProject
+        touchProject()
         currentFrame = frameIndex.coerceIn(0, newProject.frames.lastIndex)
         val f = newProject.frameAt(currentFrame)
         currentLayer = layerIndex.coerceIn(0, f.layers.lastIndex)
@@ -857,6 +869,7 @@ class EditorModel(
         project = ProjectOps.updateLayer(project, currentFrame, currentLayer) {
             it.copy(opacity = value.coerceIn(0.05f, 1f))
         }
+        touchProject()
         scheduleSave()
     }
 

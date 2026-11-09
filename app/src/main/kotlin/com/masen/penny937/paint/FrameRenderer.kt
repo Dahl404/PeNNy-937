@@ -10,10 +10,21 @@ import com.masen.penny937.model.Frame
 import com.masen.penny937.model.Layer
 import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.Project
+import com.masen.penny937.model.Tool
 import kotlin.math.roundToInt
 
 /** Renders frames at arbitrary sizes straight from the vector strokes. */
 object FrameRasterizer {
+
+    /** Reusable per-layer scratch bitmap; rendering happens on several threads. */
+    private val scratch = ThreadLocal<Bitmap>()
+
+    /** Above this a scratch bitmap is not kept around: they can reach 64 MiB each. */
+    private const val SCRATCH_KEEP_BYTES = 16L * 1024 * 1024
+
+    /** Test hook: disable the single-layer fast path so both paths can be compared. */
+    internal var forceComposited: Boolean = false
+
     fun rasterize(
         project: Project,
         frame: Frame,
@@ -27,29 +38,78 @@ object FrameRasterizer {
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         if (background != null) bitmap.eraseColor(background)
         val target = Canvas(bitmap)
-        val scratch = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val scratchCanvas = Canvas(scratch)
         val sx = w.toFloat() / project.width
         val sy = h.toFloat() / project.height
+
+        // Fast path: one opaque, non-erasing layer needs no compositing pass at all.
+        // This is the common case (a sketch on a single layer with the paper colour
+        // underneath) and it skips a full-size scratch bitmap and a full-size copy.
+        val single = if (forceComposited) null else singleDrawableLayer(frame, includeReferences)
+        if (single != null) {
+            target.save()
+            target.scale(sx, sy)
+            for (stroke in single.strokes) Ink.renderStroke(target, stroke)
+            target.restore()
+            return bitmap
+        }
+
+        val keepScratch = w.toLong() * h.toLong() * 4L <= SCRATCH_KEEP_BYTES
+        val layerBitmap = scratchFor(w, h, keepScratch)
+        val layerCanvas = Canvas(layerBitmap)
         val compositePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         for (layer in frame.layers) {
             if (!layer.visible || layer.opacity <= 0.002f) continue
             if (layer.isReference && !includeReferences) continue
-            scratch.eraseColor(Color.TRANSPARENT)
-            scratchCanvas.save()
-            scratchCanvas.scale(sx, sy)
-            for (stroke in layer.strokes) Ink.renderStroke(scratchCanvas, stroke)
-            scratchCanvas.restore()
+            layerBitmap.eraseColor(Color.TRANSPARENT)
+            layerCanvas.save()
+            layerCanvas.scale(sx, sy)
+            for (stroke in layer.strokes) Ink.renderStroke(layerCanvas, stroke)
+            if (includeReferences) layer.image?.let { drawReference(layerCanvas, it) }
+            layerCanvas.restore()
             compositePaint.alpha = (layer.opacity * 255f).roundToInt().coerceIn(0, 255)
-            target.drawBitmap(scratch, 0f, 0f, compositePaint)
+            target.drawBitmap(layerBitmap, 0f, 0f, compositePaint)
         }
-        scratch.recycle()
+        if (!keepScratch) layerBitmap.recycle()
         return bitmap
+    }
+
+    /**
+     * Returns the only layer of [frame] if it can be drawn straight onto the output:
+     * fully opaque, not a reference, and free of eraser strokes (which would punch
+     * through the paper colour instead of just the layer's own ink).
+     */
+    private fun singleDrawableLayer(frame: Frame, includeReferences: Boolean): Layer? {
+        var found: Layer? = null
+        for (layer in frame.layers) {
+            if (!layer.visible || layer.opacity <= 0.002f) continue
+            if (layer.isReference && !includeReferences) continue
+            if (found != null) return null
+            found = layer
+        }
+        val layer = found ?: return null
+        if (layer.opacity < 0.999f) return null
+        if (layer.isReference) return null
+        for (stroke in layer.strokes) if (stroke.tool == Tool.ERASER) return null
+        return layer
     }
 
     fun renderLayer(canvas: Canvas, layer: Layer) {
         layer.image?.let { drawReference(canvas, it) }
         for (stroke in layer.strokes) Ink.renderStroke(canvas, stroke)
+    }
+
+    private fun scratchFor(w: Int, h: Int, keep: Boolean): Bitmap {
+        val existing = scratch.get()
+        if (existing != null && existing.width == w && existing.height == h && !existing.isRecycled) {
+            return existing
+        }
+        if (existing != null && !existing.isRecycled) {
+            existing.recycle()
+            if (!keep) scratch.remove() else scratch.set(null)
+        }
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        if (keep) scratch.set(bitmap)
+        return bitmap
     }
 
     private fun drawReference(canvas: Canvas, image: LayerImage) {
@@ -140,8 +200,15 @@ class FrameRenderer {
         overlayHeight = 0
     }
 
-    /** Live marker ink is buffered here so translucent joints never double up. */
-    fun markerOverlay(project: Project): Bitmap {
+    /**
+     * Scratch bitmap for the stroke currently under the pen.
+     *
+     * Every tool draws its live ink here as an opaque ribbon, and the result is
+     * blended into the layer exactly once (on lift, or per frame while previewing).
+     * That is what keeps translucent marker ink from darkening at every joint, and
+     * it lets the eraser preview without touching the layer bitmap.
+     */
+    fun inkOverlay(project: Project): Bitmap {
         val existing = overlay
         if (existing != null && overlayWidth == project.width && overlayHeight == project.height) {
             return existing
@@ -153,7 +220,7 @@ class FrameRenderer {
         return overlay!!
     }
 
-    fun clearMarkerOverlay() {
+    fun clearInkOverlay() {
         overlay?.eraseColor(Color.TRANSPARENT)
     }
 

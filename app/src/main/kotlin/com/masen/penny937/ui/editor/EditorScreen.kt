@@ -152,17 +152,11 @@ fun EditorScreen(
                 )
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
-                    factory = { context ->
-                        DrawingCanvasView(context).also { canvasView = it }
-                    },
+                CanvasHost(
+                    editor = editor,
+                    darkTheme = palette.isDark,
                     modifier = Modifier.fillMaxSize(),
-                    update = { view2 ->
-                        view2.darkTheme = palette.isDark
-                        view2.bind(editor)
-                        view2.previewFrameIndex =
-                            if (editor.isPlaying) editor.previewFrame else -1
-                    }
+                    onViewCreated = { canvasView = it }
                 )
 
                 if (!editor.isPlaying) {
@@ -306,6 +300,29 @@ fun EditorScreen(
             }
         )
     }
+}
+
+@Composable
+private fun CanvasHost(
+    editor: EditorModel,
+    darkTheme: Boolean,
+    modifier: Modifier = Modifier,
+    onViewCreated: (DrawingCanvasView) -> Unit
+) {
+    // Subscribing to this value is what makes the canvas repaint continuously
+    // during onion-slider drags and after frame / layer / grid / ink changes.
+    val revision = editor.canvasRevision
+    AndroidView(
+        factory = { context ->
+            DrawingCanvasView(context).also(onViewCreated)
+        },
+        modifier = modifier,
+        update = { view ->
+            view.darkTheme = darkTheme
+            view.bind(editor, revision)
+            view.previewFrameIndex = if (editor.isPlaying) editor.previewFrame else -1
+        }
+    )
 }
 
 @Composable

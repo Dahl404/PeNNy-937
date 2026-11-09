@@ -342,23 +342,6 @@ fun BipolarSlider(
             size = Size(usable, track),
             cornerRadius = radius
         )
-        drawRoundRect(
-            brush = Brush.horizontalGradient(
-                listOf(negativeColor.copy(alpha = 0.42f), negativeColor.copy(alpha = 0.04f))
-            ),
-            topLeft = Offset(left, cy - track / 2f),
-            size = Size(center - left, track),
-            cornerRadius = radius
-        )
-        drawRoundRect(
-            brush = Brush.horizontalGradient(
-                listOf(positiveColor.copy(alpha = 0.04f), positiveColor.copy(alpha = 0.42f))
-            ),
-            topLeft = Offset(center, cy - track / 2f),
-            size = Size(right - center, track),
-            cornerRadius = radius
-        )
-
         val activeColor = when {
             v < -0.005f -> negativeColor
             v > 0.005f -> positiveColor

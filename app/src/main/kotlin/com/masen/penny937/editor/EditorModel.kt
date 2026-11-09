@@ -88,6 +88,36 @@ class EditorModel(
 
     val renderer = FrameRenderer()
 
+    /**
+     * Everything the drawing view reads from the model. Reading this in a
+     * composable scope keeps the canvas repainting while the onion slider,
+     * grid, frame, layer, ink or playback state changes.
+     */
+    val canvasRevision: Int
+        get() {
+            var h = project.updatedAt.hashCode()
+            h = h * 31 + project.frames.size
+            h = h * 31 + project.frames.sumOf { it.layers.size }
+            h = h * 31 + project.frames.sumOf { it.strokeCount }
+            h = h * 31 + project.width
+            h = h * 31 + project.height
+            h = h * 31 + project.background
+            h = h * 31 + currentFrame
+            h = h * 31 + currentLayer
+            h = h * 31 + tool.ordinal
+            h = h * 31 + color
+            h = h * 31 + size.toBits()
+            h = h * 31 + markerOpacity.toBits()
+            h = h * 31 + (if (pressureEnabled) 1 else 0)
+            h = h * 31 + (if (stylusOnly) 1 else 0)
+            h = h * 31 + onionStrength.toBits()
+            h = h * 31 + (if (gridEnabled) 1 else 0)
+            h = h * 31 + gridStyle.ordinal
+            h = h * 31 + (if (isPlaying) 1 else 0)
+            h = h * 31 + previewFrame
+            return h
+        }
+
     /** The canvas installs this so structural edits never race a stroke in progress. */
     var onBeforeStructuralChange: (() -> Unit)? = null
 

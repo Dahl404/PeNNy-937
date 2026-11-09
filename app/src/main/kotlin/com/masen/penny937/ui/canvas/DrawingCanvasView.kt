@@ -50,6 +50,8 @@ class DrawingCanvasView @JvmOverloads constructor(
                 invalidate()
             }
         }
+    private var lastCanvasRevision: Int = Int.MIN_VALUE
+
     var darkTheme: Boolean = false
         set(value) {
             field = value
@@ -127,7 +129,8 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private enum class Mode { NONE, DRAW, SHAPE, PAN, PINCH }
 
-    fun bind(model: EditorModel) {
+    fun bind(model: EditorModel, revision: Int = 0) {
+        lastCanvasRevision = revision
         val previous = editor
         editor = model
         model.onBeforeStructuralChange = { cancelActiveStroke() }

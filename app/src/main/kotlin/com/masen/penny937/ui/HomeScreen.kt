@@ -628,7 +628,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.2 · Made for stylus and patience",
+                "Version 1.3 · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
             )

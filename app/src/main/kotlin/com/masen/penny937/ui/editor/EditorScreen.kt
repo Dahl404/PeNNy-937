@@ -67,6 +67,7 @@ import com.masen.penny937.ui.components.ColorCircle
 import com.masen.penny937.ui.components.PennyCard
 import com.masen.penny937.ui.components.PennyIconButton
 import com.masen.penny937.ui.icons.PennyIcons
+import com.masen.penny937.ui.icons.shapeIcon
 import com.masen.penny937.ui.theme.LocalPenny
 import com.masen.penny937.ui.theme.LocalPennyType
 import kotlinx.coroutines.Dispatchers
@@ -160,19 +161,37 @@ fun EditorScreen(
                         onBrush = { sheet = EditorSheet.BRUSH },
                         onColor = { sheet = EditorSheet.COLOR }
                     )
-                    PennyIconButton(
-                        icon = PennyIcons.Fit,
-                        onClick = {
-                            canvasView?.cancelActiveStroke()
-                            canvasView?.fitToPaper(animate = true)
-                        },
+                    Column(
                         modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp),
-                        size = 38.dp,
-                        iconSize = 18.dp,
-                        tint = palette.textSecondary,
-                        background = palette.surface,
-                        contentDescription = "Fit canvas"
-                    )
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PennyIconButton(
+                            icon = PennyIcons.Grid,
+                            onClick = {
+                                PennyHaptics.tap(view)
+                                editor.toggleGrid()
+                            },
+                            selected = editor.gridEnabled,
+                            size = 38.dp,
+                            iconSize = 18.dp,
+                            tint = palette.textSecondary,
+                            background = palette.surface,
+                            contentDescription = "Toggle grid"
+                        )
+                        PennyIconButton(
+                            icon = PennyIcons.Fit,
+                            onClick = {
+                                canvasView?.cancelActiveStroke()
+                                canvasView?.fitToPaper(animate = true)
+                            },
+                            size = 38.dp,
+                            iconSize = 18.dp,
+                            tint = palette.textSecondary,
+                            background = palette.surface,
+                            contentDescription = "Fit canvas"
+                        )
+                    }
                     if (hintAlpha > 0.01f) {
                         HintPill(
                             text = if (editor.stylusOnly) {
@@ -367,7 +386,7 @@ private fun ToolRail(
 ) {
     val palette = LocalPenny.current
     val view = LocalView.current
-    val tools = listOf(Tool.PEN, Tool.PENCIL, Tool.MARKER, Tool.ERASER)
+    val tools = listOf(Tool.PEN, Tool.PENCIL, Tool.MARKER, Tool.SHAPE, Tool.ERASER)
     PennyCard(corner = 24.dp, modifier = modifier) {
         Column(
             modifier = Modifier.padding(4.dp),
@@ -380,6 +399,7 @@ private fun ToolRail(
                         Tool.PEN -> PennyIcons.Pen
                         Tool.PENCIL -> PennyIcons.Pencil
                         Tool.MARKER -> PennyIcons.Marker
+                        Tool.SHAPE -> shapeIcon(editor.shapeKind)
                         Tool.ERASER -> PennyIcons.Eraser
                     },
                     selected = editor.tool == tool,

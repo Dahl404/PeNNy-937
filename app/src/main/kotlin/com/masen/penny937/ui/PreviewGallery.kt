@@ -276,6 +276,43 @@ fun BrushSheetPreview() {
     }
 }
 
+@Preview(name = "Shape brush sheet", widthDp = 412, heightDp = 915, showBackground = true)
+@Composable
+fun ShapeBrushSheetPreview() {
+    val model = previewModel()
+    model.chooseTool(Tool.SHAPE)
+    model.chooseShape(com.masen.penny937.model.ShapeKind.CIRCLE)
+    PennyTheme {
+        Box(Modifier.fillMaxSize()) {
+            BrushSheet(visible = true, editor = model, onDismiss = {})
+        }
+    }
+}
+
+@Preview(name = "Editor with grid and shape", widthDp = 412, heightDp = 915, showBackground = true)
+@Composable
+fun EditorGridPreview() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val model = remember {
+        EditorModel(
+            context = context,
+            store = ProjectStore(context),
+            prefs = Prefs(context),
+            initial = sampleProject(),
+            scope = scope
+        ).also {
+            it.selectFrame(1)
+            it.toggleGrid()
+            it.chooseTool(Tool.SHAPE)
+            it.chooseShape(com.masen.penny937.model.ShapeKind.CIRCLE)
+        }
+    }
+    PennyTheme {
+        EditorScreen(model, {}, {}, {})
+    }
+}
+
 @Preview(name = "Layers sheet", widthDp = 412, heightDp = 915, showBackground = true)
 @Composable
 fun LayersSheetPreview() {

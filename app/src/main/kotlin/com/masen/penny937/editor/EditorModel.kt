@@ -10,6 +10,8 @@ import com.masen.penny937.export.ExportFormat
 import com.masen.penny937.export.Exporter
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.ProjectOps
+import com.masen.penny937.model.GridStyle
+import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.FrameRenderer
@@ -58,6 +60,12 @@ class EditorModel(
     var stylusOnly by mutableStateOf(prefs.stylusOnly)
         private set
     var onionEnabled by mutableStateOf(prefs.onionEnabled)
+        private set
+    var gridEnabled by mutableStateOf(prefs.gridEnabled)
+        private set
+    var gridStyle by mutableStateOf(prefs.gridStyle)
+        private set
+    var shapeKind by mutableStateOf(prefs.shapeKind)
         private set
 
     var showGestureHint by mutableStateOf(!prefs.hintSeen)
@@ -235,6 +243,21 @@ class EditorModel(
     fun toggleOnion() {
         onionEnabled = !onionEnabled
         prefs.onionEnabled = onionEnabled
+    }
+
+    fun toggleGrid() {
+        gridEnabled = !gridEnabled
+        prefs.gridEnabled = gridEnabled
+    }
+
+    fun chooseGridStyle(style: GridStyle) {
+        gridStyle = style
+        prefs.gridStyle = style
+    }
+
+    fun chooseShape(kind: ShapeKind) {
+        shapeKind = kind
+        prefs.shapeKind = kind
     }
 
     // ---------------------------------------------------------------- frames

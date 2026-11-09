@@ -620,12 +620,14 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             TipRow("Press the pen's side button to erase for that stroke.")
             TipRow("Onion skins show the frames just before and after.")
             TipRow("Every frame has its own unlimited layers.")
+            TipRow("Line, rectangle, square, ellipse and circle are one drag away.")
+            TipRow("Grid and thirds guides live in the canvas corner.")
             TipRow("Canvas size, frame rate and paper are yours to choose.")
             Spacer(Modifier.height(16.dp))
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.0 · Made for stylus and patience",
+                "Version 1.1 · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
             )

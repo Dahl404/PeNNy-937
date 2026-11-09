@@ -48,6 +48,11 @@ frame actions and layers are always available.
 - **Onion skin.** Previous frames are tinted warm, next frames cool.
 - **Inks.** Pen (pressure taper), Pencil (procedurally generated graphite grain),
   Marker (single-pass translucent compositing so joints never double up), Eraser.
+- **Basic shapes.** Line, rectangle, square, ellipse and circle are drag-to-place
+  vector outlines. Square/circle hold their aspect; shapes undo, erase and export
+  like any other stroke.
+- **Grid view.** A toggleable squares grid (with a centre cross) or rule-of-thirds
+  guide drawn over the paper, never baked into exports.
 - **Autosave.** Binary vector project files + a PNG poster thumbnail.
 
 ## Export

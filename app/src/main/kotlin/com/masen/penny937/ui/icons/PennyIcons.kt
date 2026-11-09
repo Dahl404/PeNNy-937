@@ -198,6 +198,27 @@ object PennyIcons {
         "M5 19 L10 14",
         "M12.5 5.5 L18.5 11.5"
     )
+    val Grid = line(
+        "grid",
+        "M4 4 H20 V20 H4 Z",
+        "M9.34 4 V20",
+        "M14.66 4 V20",
+        "M4 9.34 H20",
+        "M4 14.66 H20"
+    )
+    val LineShape = line("lineShape", "M4.5 19.5 L19.5 4.5")
+    val RectangleShape = line(
+        "rectangleShape",
+        "M4 7 H20 A1 1 0 0 1 21 8 V16 A1 1 0 0 1 20 17 H4 A1 1 0 0 1 3 16 V8 A1 1 0 0 1 4 7 Z"
+    )
+    val CircleShape = line(
+        "circleShape",
+        "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z"
+    )
+    val EllipseShape = line(
+        "ellipseShape",
+        "M12 5.5 A9 6.5 0 1 0 12 18.5 A9 6.5 0 1 0 12 5.5 Z"
+    )
     val Info = line(
         "info",
         "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z",

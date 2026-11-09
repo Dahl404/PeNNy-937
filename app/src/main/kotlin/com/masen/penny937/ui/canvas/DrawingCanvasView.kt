@@ -15,9 +15,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import com.masen.penny937.editor.EditorModel
+import com.masen.penny937.model.GridStyle
 import com.masen.penny937.model.Project
+import com.masen.penny937.model.ShapeKind
+import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.Ink
+import com.masen.penny937.paint.Shapes
 import com.masen.penny937.paint.StrokeInker
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -66,6 +70,7 @@ class DrawingCanvasView @JvmOverloads constructor(
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val markerCompositePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val clipPath = Path()
     private val paperRect = RectF()
     private val bitmapRect = RectF()
@@ -89,6 +94,15 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var markerOpacity = 1f
     private var strokeIsMarker = false
 
+    private var shapeKind = ShapeKind.LINE
+    private var shapeStartX = 0f
+    private var shapeStartY = 0f
+    private var shapeCurrentX = 0f
+    private var shapeCurrentY = 0f
+    private var shapeColor = 0
+    private var shapeWidth = 8f
+    private var shapePreview: Stroke? = null
+
     private var panLastX = 0f
     private var panLastY = 0f
     private var pinchStartSpan = 1f
@@ -111,7 +125,7 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var suppressUntilUp = false
     private var animator: ValueAnimator? = null
 
-    private enum class Mode { NONE, DRAW, PAN, PINCH }
+    private enum class Mode { NONE, DRAW, SHAPE, PAN, PINCH }
 
     fun bind(model: EditorModel) {
         val previous = editor
@@ -132,7 +146,8 @@ class DrawingCanvasView @JvmOverloads constructor(
         if (previous != model) {
             mode = Mode.NONE
         }
-        val targetStillValid = inker == null ||
+        val targetActive = inker != null || mode == Mode.SHAPE
+        val targetStillValid = !targetActive ||
             (model.currentFrame == strokeFrameIndex &&
                 model.currentLayer == activeLayerIndex &&
                 model.frame.layers.getOrNull(activeLayerIndex)?.id == activeLayerId)
@@ -249,6 +264,12 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
         }
 
+        if (editing) {
+            if (model.gridEnabled) drawGrid(canvas, model, project)
+            val preview = shapePreview
+            if (preview != null) Ink.renderStroke(canvas, preview)
+        }
+
         canvas.restoreToCount(save)
 
         borderPaint.color = if (darkTheme) Color.argb(40, 255, 255, 255) else Color.argb(30, 0, 0, 0)
@@ -276,6 +297,44 @@ class DrawingCanvasView @JvmOverloads constructor(
         }
         onionPaint.colorFilter = null
         onionPaint.alpha = 255
+    }
+
+    private fun drawGrid(canvas: Canvas, model: EditorModel, project: Project) {
+        val paperIsDark = Color.luminance(project.background) < 0.4f
+        val base = if (paperIsDark) Color.argb(28, 255, 255, 255) else Color.argb(24, 0, 0, 0)
+        val strong = if (paperIsDark) Color.argb(52, 255, 255, 255) else Color.argb(46, 0, 0, 0)
+        guidePaint.strokeWidth = (1f / scale).coerceAtLeast(0.5f)
+        val w = project.width.toFloat()
+        val h = project.height.toFloat()
+        when (model.gridStyle) {
+            GridStyle.GRID -> {
+                val cell = min(w, h) / 8f
+                if (cell < 2f) return
+                guidePaint.color = base
+                var x = cell
+                while (x < w - 0.5f) {
+                    canvas.drawLine(x, 0f, x, h, guidePaint)
+                    x += cell
+                }
+                var y = cell
+                while (y < h - 0.5f) {
+                    canvas.drawLine(0f, y, w, y, guidePaint)
+                    y += cell
+                }
+                guidePaint.color = strong
+                canvas.drawLine(w / 2f, 0f, w / 2f, h, guidePaint)
+                canvas.drawLine(0f, h / 2f, w, h / 2f, guidePaint)
+            }
+            GridStyle.THIRDS -> {
+                guidePaint.color = strong
+                for (i in 1..2) {
+                    val x = w * i / 3f
+                    val y = h * i / 3f
+                    canvas.drawLine(x, 0f, x, h, guidePaint)
+                    canvas.drawLine(0f, y, w, y, guidePaint)
+                }
+            }
+        }
     }
 
     private fun drawCursor(canvas: Canvas, model: EditorModel) {
@@ -374,14 +433,19 @@ class DrawingCanvasView @JvmOverloads constructor(
         val eraserOverride = (event.buttonState and
             (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0
 
-        if (mode == Mode.DRAW) {
-            if (newIsPen && !drawingWithPen) {
-                // A pen arrived while a finger stroke was in progress. Hand over to the pen.
+        if (mode == Mode.DRAW || mode == Mode.SHAPE) {
+            if (drawingWithPen) {
+                // A palm or spare finger landed while the pen was working. Ignore it.
+                return
+            }
+            if (newIsPen) {
+                // A pen arrived while a finger stroke/shape was in progress.
                 cancelStroke()
                 startStrokeAt(event, newIndex, eraserOverride)
+                return
             }
-            // Otherwise this is a palm or spare finger: ignore it completely.
-            return
+            // A second finger on a finger stroke/shape: abandon it and pinch.
+            cancelStroke()
         }
         if (newIsPen) {
             // A palm may have landed first. Abandon navigation and let the pen draw.
@@ -420,6 +484,7 @@ class DrawingCanvasView @JvmOverloads constructor(
                 if (index < 0) return
                 appendSamples(event, index)
             }
+            Mode.SHAPE -> updateShape(event)
             Mode.PAN -> {
                 val index = event.findPointerIndex(activePointerId)
                 if (index < 0) return
@@ -460,6 +525,11 @@ class DrawingCanvasView @JvmOverloads constructor(
             mode = Mode.NONE
             return
         }
+        if (mode == Mode.SHAPE && lifted == activePointerId) {
+            commitShape()
+            mode = Mode.NONE
+            return
+        }
         if (mode == Mode.PINCH && event.pointerCount - 1 < 2) {
             mode = Mode.NONE
         }
@@ -474,7 +544,11 @@ class DrawingCanvasView @JvmOverloads constructor(
             mode = Mode.NONE
             return
         }
-        if (mode == Mode.DRAW) finishStroke()
+        when (mode) {
+            Mode.DRAW -> finishStroke()
+            Mode.SHAPE -> commitShape()
+            else -> Unit
+        }
         mode = Mode.NONE
         activePointerId = -1
     }
@@ -525,6 +599,10 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private fun beginStroke(event: MotionEvent, index: Int, eraserOverride: Boolean) {
         val model = editor ?: return
+        if (model.tool == Tool.SHAPE && !eraserOverride) {
+            beginShape(event, index, model)
+            return
+        }
         val project = model.project
         val layer = model.layer
         val activeTool = if (eraserOverride) Tool.ERASER else model.tool
@@ -552,6 +630,63 @@ class DrawingCanvasView @JvmOverloads constructor(
         model.ensureLayerVisibleForInk()
         mode = Mode.DRAW
         addSample(event, index)
+    }
+
+    private fun beginShape(event: MotionEvent, index: Int, model: EditorModel) {
+        drawPointerToolType = event.getToolType(index)
+        activeLayerIndex = model.currentLayer
+        activeLayerId = model.layer.id
+        strokeFrameIndex = model.currentFrame
+        model.ensureLayerVisibleForInk()
+        shapeKind = model.shapeKind
+        shapeColor = model.color
+        shapeWidth = model.size
+        shapeStartX = toProjectX(event.getX(index))
+        shapeStartY = toProjectY(event.getY(index))
+        shapeCurrentX = shapeStartX
+        shapeCurrentY = shapeStartY
+        shapePreview = null
+        mode = Mode.SHAPE
+        invalidate()
+    }
+
+    private fun updateShape(event: MotionEvent) {
+        val index = event.findPointerIndex(activePointerId)
+        if (index < 0) return
+        shapeCurrentX = toProjectX(event.getX(index))
+        shapeCurrentY = toProjectY(event.getY(index))
+        rebuildShapePreview()
+    }
+
+    private fun rebuildShapePreview() {
+        shapePreview = Shapes.build(
+            kind = shapeKind,
+            x0 = shapeStartX,
+            y0 = shapeStartY,
+            x1 = shapeCurrentX,
+            y1 = shapeCurrentY,
+            color = shapeColor,
+            width = shapeWidth
+        )
+        invalidate()
+    }
+
+    private fun commitShape() {
+        val model = editor ?: run { resetShape(); return }
+        val preview = shapePreview ?: Shapes.build(
+            kind = shapeKind,
+            x0 = shapeStartX,
+            y0 = shapeStartY,
+            x1 = shapeCurrentX,
+            y1 = shapeCurrentY,
+            color = shapeColor,
+            width = shapeWidth
+        )
+        if (preview != null && strokeFrameIndex >= 0) {
+            model.addStroke(preview, strokeFrameIndex, activeLayerIndex)
+        }
+        resetShape()
+        invalidate()
     }
 
     private fun appendSamples(event: MotionEvent, index: Int) {
@@ -626,6 +761,12 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
 
     private fun cancelStroke() {
+        if (mode == Mode.SHAPE) {
+            resetShape()
+            mode = Mode.NONE
+            invalidate()
+            return
+        }
         val bitmap = activeBitmap
         if (bitmap != null) {
             editor?.renderer?.invalidateLayer(activeLayerId)
@@ -633,6 +774,14 @@ class DrawingCanvasView @JvmOverloads constructor(
         }
         resetStroke()
         invalidate()
+    }
+
+    private fun resetShape() {
+        shapePreview = null
+        shapeStartX = 0f
+        shapeStartY = 0f
+        shapeCurrentX = 0f
+        shapeCurrentY = 0f
     }
 
     private fun inkCanvas(): Canvas? = if (strokeIsMarker) {

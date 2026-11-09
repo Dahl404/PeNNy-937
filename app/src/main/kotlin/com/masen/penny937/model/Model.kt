@@ -9,6 +9,7 @@ enum class Tool(val label: String) {
     PEN("Pen"),
     PENCIL("Pencil"),
     MARKER("Marker"),
+    SHAPE("Shape"),
     ERASER("Eraser");
 
     val isEraser: Boolean get() = this == ERASER
@@ -20,6 +21,7 @@ enum class Tool(val label: String) {
         PEN -> 8f
         PENCIL -> 7f
         MARKER -> 40f
+        SHAPE -> 8f
         ERASER -> 40f
     }
 
@@ -30,13 +32,28 @@ enum class Tool(val label: String) {
 
     fun minWidth(): Float = when (this) {
         MARKER, ERASER -> 4f
+        SHAPE -> 1f
         else -> 0.6f
     }
 
     fun maxWidth(): Float = when (this) {
         MARKER, ERASER -> 260f
+        SHAPE -> 160f
         else -> 120f
     }
+}
+
+enum class ShapeKind(val label: String) {
+    LINE("Line"),
+    RECTANGLE("Rectangle"),
+    SQUARE("Square"),
+    ELLIPSE("Ellipse"),
+    CIRCLE("Circle")
+}
+
+enum class GridStyle(val label: String) {
+    GRID("Squares"),
+    THIRDS("Thirds")
 }
 
 /**

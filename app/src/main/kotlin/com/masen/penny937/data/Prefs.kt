@@ -2,6 +2,8 @@ package com.masen.penny937.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.masen.penny937.model.GridStyle
+import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Tool
 
 class Prefs(context: Context) {
@@ -36,6 +38,22 @@ class Prefs(context: Context) {
     var pressureEnabled: Boolean
         get() = sp?.getBoolean("pressure", true) ?: true
         set(value) = write { putBoolean("pressure", value) }
+
+    var gridEnabled: Boolean
+        get() = sp?.getBoolean("grid", false) ?: false
+        set(value) = write { putBoolean("grid", value) }
+
+    var gridStyle: GridStyle
+        get() = runCatching {
+            GridStyle.valueOf(sp?.getString("gridStyle", GridStyle.GRID.name) ?: GridStyle.GRID.name)
+        }.getOrDefault(GridStyle.GRID)
+        set(value) = write { putString("gridStyle", value.name) }
+
+    var shapeKind: ShapeKind
+        get() = runCatching {
+            ShapeKind.valueOf(sp?.getString("shapeKind", ShapeKind.LINE.name) ?: ShapeKind.LINE.name)
+        }.getOrDefault(ShapeKind.LINE)
+        set(value) = write { putString("shapeKind", value.name) }
 
     var lastTool: Tool
         get() = runCatching {

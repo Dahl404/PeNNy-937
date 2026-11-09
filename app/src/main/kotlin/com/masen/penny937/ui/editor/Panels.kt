@@ -49,10 +49,13 @@ import androidx.compose.ui.unit.sp
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.editor.ExportState
 import com.masen.penny937.export.ExportFormat
+import com.masen.penny937.model.GridStyle
 import com.masen.penny937.model.ProjectFactory
+import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.Ink
+import com.masen.penny937.paint.Shapes
 import com.masen.penny937.ui.SharedFiles
 import com.masen.penny937.ui.components.ChoiceChip
 import com.masen.penny937.ui.components.ColorCircle
@@ -70,6 +73,7 @@ import com.masen.penny937.ui.components.StatPill
 import com.masen.penny937.ui.components.ToggleRow
 import com.masen.penny937.ui.components.ValueStepper
 import com.masen.penny937.ui.icons.PennyIcons
+import com.masen.penny937.ui.icons.shapeIcon
 import com.masen.penny937.ui.theme.LocalPenny
 import com.masen.penny937.ui.theme.LocalPennyType
 import androidx.compose.ui.platform.LocalContext
@@ -250,27 +254,50 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
     val minWidth = tool.minWidth()
     val maxWidth = tool.maxWidth()
     val quickSizes = when (tool) {
-        Tool.PEN, Tool.PENCIL -> listOf(2f, 4f, 8f, 16f, 32f)
+        Tool.PEN, Tool.PENCIL, Tool.SHAPE -> listOf(2f, 4f, 8f, 16f, 32f)
         else -> listOf(16f, 32f, 64f, 120f)
     }
     val previewColor = if (tool == Tool.ERASER) 0xFF8E8E93.toInt() else editor.color
-    val previewTool = if (tool == Tool.ERASER) Tool.PEN else tool
-    val previewStroke = remember(tool, editor.color, editor.size, editor.markerOpacity) {
-        val n = 96
-        val points = FloatArray(n * 3)
-        for (i in 0 until n) {
-            val t = i / (n - 1f)
-            points[i * 3] = 8f + t * 584f
-            points[i * 3 + 1] = 150f + sin(t * 4.1f) * 32f
-            points[i * 3 + 2] = 0.15f + 0.85f * sin(t * Math.PI).toFloat()
+    val previewStroke = remember(
+        tool, editor.color, editor.size, editor.markerOpacity, editor.shapeKind
+    ) {
+        if (tool == Tool.SHAPE) {
+            val g = when (editor.shapeKind) {
+                ShapeKind.LINE -> floatArrayOf(40f, 236f, 560f, 64f)
+                ShapeKind.RECTANGLE -> floatArrayOf(80f, 58f, 520f, 242f)
+                ShapeKind.SQUARE -> floatArrayOf(210f, 58f, 430f, 278f)
+                ShapeKind.ELLIPSE -> floatArrayOf(70f, 58f, 530f, 242f)
+                ShapeKind.CIRCLE -> floatArrayOf(210f, 58f, 430f, 278f)
+            }
+            Shapes.build(
+                kind = editor.shapeKind,
+                x0 = g[0],
+                y0 = g[1],
+                x1 = g[2],
+                y1 = g[3],
+                color = previewColor,
+                width = editor.size
+            ) ?: Stroke(
+                Tool.PEN, previewColor, editor.size, 1f,
+                floatArrayOf(60f, 150f, 1f, 540f, 150f, 1f)
+            )
+        } else {
+            val n = 96
+            val points = FloatArray(n * 3)
+            for (i in 0 until n) {
+                val t = i / (n - 1f)
+                points[i * 3] = 8f + t * 584f
+                points[i * 3 + 1] = 150f + sin(t * 4.1f) * 32f
+                points[i * 3 + 2] = 0.15f + 0.85f * sin(t * Math.PI).toFloat()
+            }
+            Stroke(
+                tool = if (tool == Tool.ERASER) Tool.PEN else tool,
+                color = previewColor,
+                width = editor.size,
+                opacity = if (tool == Tool.MARKER) editor.markerOpacity else 1f,
+                points = points
+            )
         }
-        Stroke(
-            tool = previewTool,
-            color = previewColor,
-            width = editor.size,
-            opacity = if (tool == Tool.MARKER) editor.markerOpacity else 1f,
-            points = points
-        )
     }
 
     PennySheet(
@@ -281,6 +308,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
             Tool.PEN -> "Pressure-tapered ink"
             Tool.PENCIL -> "Grainy graphite"
             Tool.MARKER -> "Broad translucent colour"
+            Tool.SHAPE -> "Drag to place a vector outline"
             Tool.ERASER -> "Removes ink from the active layer"
         },
         leading = {
@@ -296,6 +324,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                         Tool.PEN -> PennyIcons.Pen
                         Tool.PENCIL -> PennyIcons.Pencil
                         Tool.MARKER -> PennyIcons.Marker
+                        Tool.SHAPE -> shapeIcon(editor.shapeKind)
                         Tool.ERASER -> PennyIcons.Eraser
                     },
                     contentDescription = null,
@@ -306,6 +335,24 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
         }
     ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
+            if (tool == Tool.SHAPE) {
+                SectionLabel("KIND")
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    for (kind in ShapeKind.entries) {
+                        ShapeChoice(
+                            kind = kind,
+                            selected = editor.shapeKind == kind,
+                            modifier = Modifier.weight(1f),
+                            onClick = { editor.chooseShape(kind) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
             PreviewBox(projectBackground = editor.project.background, stroke = previewStroke)
             Spacer(Modifier.height(16.dp))
             SliderBlock(label = "Size", valueText = "${editor.size.roundToInt()} px") {
@@ -324,15 +371,17 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                     )
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Hairline()
-            Spacer(Modifier.height(14.dp))
-            ToggleRow(
-                title = "Pressure",
-                subtitle = "Vary width with stylus pressure",
-                checked = editor.pressureEnabled,
-                onCheckedChange = { editor.togglePressure() }
-            )
+            if (tool != Tool.SHAPE) {
+                Spacer(Modifier.height(16.dp))
+                Hairline()
+                Spacer(Modifier.height(14.dp))
+                ToggleRow(
+                    title = "Pressure",
+                    subtitle = "Vary width with stylus pressure",
+                    checked = editor.pressureEnabled,
+                    onCheckedChange = { editor.togglePressure() }
+                )
+            }
             if (tool == Tool.MARKER) {
                 Spacer(Modifier.height(14.dp))
                 Hairline()
@@ -354,6 +403,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                     Tool.PEN -> "Pen width follows stylus pressure. Hold the pen's side button for a temporary eraser."
                     Tool.PENCIL -> "Graphite texture is generated at your ink colour, so it feels the same at every zoom level."
                     Tool.MARKER -> "Marker ink is composited once per stroke, so overlaps never turn darker at the seams."
+                    Tool.SHAPE -> "Drag from corner to corner. Square and circle keep their aspect; release to commit the outline. Shapes are vectors, so undo and export treat them like any stroke."
                     Tool.ERASER -> "The eraser only touches the active layer. Hide a layer to protect it."
                 },
                 style = type.caption,
@@ -400,6 +450,45 @@ private fun PreviewBox(projectBackground: Int, stroke: Stroke) {
                 native.restore()
             }
         }
+    }
+}
+
+@Composable
+private fun ShapeChoice(
+    kind: ShapeKind,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val shape = RoundedCornerShape(11.dp)
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(if (selected) palette.accentSoft else palette.surfaceSunken)
+            .border(
+                if (selected) 1.2.dp else 0.6.dp,
+                if (selected) palette.accent else palette.hairline,
+                shape
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            shapeIcon(kind),
+            contentDescription = kind.label,
+            tint = if (selected) palette.accent else palette.textSecondary,
+            modifier = Modifier.size(19.dp)
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            kind.label,
+            style = type.caption.copy(fontSize = 9.sp),
+            color = if (selected) palette.accent else palette.textSecondary,
+            maxLines = 1
+        )
     }
 }
 
@@ -1026,6 +1115,25 @@ fun BoxScope.ProjectMenuSheet(
                 checked = editor.onionEnabled,
                 onCheckedChange = { editor.toggleOnion() }
             )
+            Spacer(Modifier.height(12.dp))
+            ToggleRow(
+                title = "Grid",
+                subtitle = "Guide lines over the paper",
+                checked = editor.gridEnabled,
+                onCheckedChange = { editor.toggleGrid() }
+            )
+            if (editor.gridEnabled) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (style in GridStyle.entries) {
+                        ChoiceChip(
+                            label = style.label,
+                            selected = editor.gridStyle == style,
+                            onClick = { editor.chooseGridStyle(style) }
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(16.dp))
             Hairline()
             Spacer(Modifier.height(14.dp))

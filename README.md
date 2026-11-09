@@ -48,6 +48,12 @@ frame actions and layers are always available.
   where you can drag, pinch-scale and rotate it, then locks as a dedicated reference
   layer on the current frame. Reference layers are guides: they are never drawn on,
   exported, played back or onion-skinned. Unlock to reposition or delete.
+- **Reference video.** Import a clip from Layers; it is sampled at the project frame
+  rate (for example 10s at 12fps = 120 references) and each sample becomes a locked
+  reference layer on its own timeline frame, extending the animation as needed.
+  The first reference is fit to the canvas, the first frame of the clip is selected,
+  and the next video import automatically continues after the previous clip ends.
+  Long clips are capped at 3000 frames per import; lower the project fps or trim.
 - **No maximum animation length.** Frames are lazy-rendered in the timeline and
   streamed during export.
 - **Editable canvas.** Width/height 32–4096 px, frame rate 1–60 fps, five paper

@@ -15,6 +15,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -82,6 +83,7 @@ import com.masen.penny937.ui.components.BipolarSlider
 import com.masen.penny937.ui.components.ColorCircle
 import com.masen.penny937.ui.components.PennyCard
 import com.masen.penny937.ui.components.PennyIconButton
+import com.masen.penny937.ui.components.SecondaryButton
 import com.masen.penny937.ui.icons.PennyIcons
 import com.masen.penny937.ui.icons.shapeIcon
 import com.masen.penny937.ui.theme.LocalPenny
@@ -114,6 +116,11 @@ fun EditorScreen(
     ) { uri ->
         if (uri != null) editor.importReference(uri)
     }
+    val pickVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) editor.importVideoReference(uri)
+    }
     val hintAlpha by animateFloatAsState(
         targetValue = if (
             hintVisible && sheet == EditorSheet.NONE && !editor.isPlaying &&
@@ -135,6 +142,7 @@ fun EditorScreen(
 
     BackHandler {
         when {
+            editor.videoImport != null -> editor.cancelVideoImport()
             editor.placement != null -> editor.cancelPlacement()
             confirmDelete -> confirmDelete = false
             sheet != EditorSheet.NONE -> sheet = EditorSheet.NONE
@@ -319,6 +327,12 @@ fun EditorScreen(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
             },
+            onImportVideo = {
+                sheet = EditorSheet.NONE
+                pickVideo.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                )
+            },
             onPositionReference = {
                 sheet = EditorSheet.NONE
                 editor.beginReposition(editor.layer)
@@ -359,6 +373,88 @@ fun EditorScreen(
                 onDeleteProject()
             }
         )
+
+        VideoImportOverlay(editor)
+    }
+}
+
+@Composable
+private fun VideoImportOverlay(editor: EditorModel) {
+    val state = editor.videoImport ?: return
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        // Separate scrim keeps it from swallowing the Cancel button.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.38f))
+                .pointerInput(Unit) { detectTapGestures { } }
+        )
+        PennyCard(corner = 24.dp) {
+            Column(
+                Modifier
+                    .width(300.dp)
+                    .padding(20.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        PennyIcons.Video,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text("Importing video", style = type.title, color = palette.textPrimary)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    when {
+                        state.preparing -> "Reading the clip…"
+                        state.total > 0 -> "Extracting frame ${state.done} of ${state.total}"
+                        else -> "Extracting frames…"
+                    },
+                    style = type.body,
+                    color = palette.textSecondary
+                )
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(palette.surfaceSunken)
+                ) {
+                    if (state.total > 0) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth((state.done.toFloat() / state.total).coerceIn(0f, 1f))
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(palette.accent)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    "Each extracted frame becomes a locked reference layer, " +
+                        "at ${editor.project.fps} fps.",
+                    style = type.caption,
+                    color = palette.textTertiary,
+                    lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                SecondaryButton(
+                    text = "Cancel import",
+                    onClick = { editor.cancelVideoImport() },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = PennyIcons.Close
+                )
+            }
+        }
     }
 }
 

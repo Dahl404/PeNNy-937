@@ -7,7 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.masen.penny937.data.Prefs
 import com.masen.penny937.data.ProjectStore
+import com.masen.penny937.data.ExtractedVideo
 import com.masen.penny937.data.ReferenceFiles
+import com.masen.penny937.data.VideoReferenceExtractor
 import com.masen.penny937.export.ExportFormat
 import com.masen.penny937.export.Exporter
 import com.masen.penny937.model.Project
@@ -47,6 +49,12 @@ data class ReferencePlacement(
 }
 
 data class EditorHint(val id: Int, val text: String)
+
+data class VideoImportState(
+    val done: Int,
+    val total: Int,
+    val preparing: Boolean = false
+)
 
 sealed interface ExportState {
     data object Idle : ExportState
@@ -96,7 +104,12 @@ class EditorModel(
         private set
     var hint by mutableStateOf<EditorHint?>(null)
         private set
+    var videoImport by mutableStateOf<VideoImportState?>(null)
+        private set
     private var hintCounter = 0
+    private var videoImportJob: Job? = null
+    private var lastVideoStart: Int? = null
+    private var lastVideoEnd: Int? = null
 
     var showGestureHint by mutableStateOf(!prefs.hintSeen)
         private set
@@ -216,8 +229,14 @@ class EditorModel(
         apply(updated, currentFrame, currentLayer)
     }
 
+    private fun clearVideoRange() {
+        lastVideoStart = null
+        lastVideoEnd = null
+    }
+
     fun undo() {
         cancelActiveInk()
+        clearVideoRange()
         renderer.invalidateComposites()
         val snap = undoStack.removeLastOrNull() ?: return
         redoStack.addLast(Snapshot(project, currentFrame, currentLayer))
@@ -229,6 +248,7 @@ class EditorModel(
 
     fun redo() {
         cancelActiveInk()
+        clearVideoRange()
         renderer.invalidateComposites()
         val snap = redoStack.removeLastOrNull() ?: return
         undoStack.addLast(Snapshot(project, currentFrame, currentLayer))
@@ -279,7 +299,7 @@ class EditorModel(
     // ------------------------------------------------------------- references
 
     fun importReference(uri: Uri) {
-        if (placement != null || importingReference) return
+        if (placement != null || importingReference || videoImport != null) return
         cancelActiveInk()
         if (isPlaying) stopPlayback()
         val targetFrame = currentFrame
@@ -321,6 +341,7 @@ class EditorModel(
     }
 
     fun beginReposition(layer: Layer) {
+        if (videoImport != null) return
         val image = layer.image ?: return
         cancelActiveInk()
         if (isPlaying) stopPlayback()
@@ -396,6 +417,91 @@ class EditorModel(
             placement = null
             apply(updated, frameIndex, currentLayer)
         }
+    }
+
+    fun importVideoReference(uri: Uri) {
+        if (placement != null || importingReference || videoImport != null) return
+        cancelActiveInk()
+        if (isPlaying) stopPlayback()
+        val start = lastVideoStart?.let { previousStart ->
+            val previousEnd = lastVideoEnd
+            if (previousEnd != null && currentFrame in previousStart..previousEnd) {
+                previousEnd + 1
+            } else {
+                currentFrame
+            }
+        } ?: currentFrame
+        val startFrame = start.coerceIn(0, project.frames.size)
+        val targetFps = project.fps
+        videoImport = VideoImportState(done = 0, total = 0, preparing = true)
+        videoImportJob = scope.launch {
+            try {
+                val extracted: ExtractedVideo = VideoReferenceExtractor.extract(
+                    context = context,
+                    uri = uri,
+                    targetFps = targetFps,
+                    onTotal = { total ->
+                        withContext(Dispatchers.Main) {
+                            videoImport = VideoImportState(done = 0, total = total)
+                        }
+                    },
+                    onProgress = { done ->
+                        withContext(Dispatchers.Main) {
+                            videoImport = videoImport?.copy(done = done)
+                        }
+                    }
+                )
+                val current = project
+                val first = extracted.frames.firstOrNull()
+                    ?: throw IllegalStateException("No video frames were extracted")
+                val scale = min(
+                    current.width.toFloat() / first.width,
+                    current.height.toFloat() / first.height
+                )
+                val displayWidth = (first.width * scale).coerceAtLeast(16f)
+                val displayHeight = (first.height * scale).coerceAtLeast(16f)
+                val centerX = current.width / 2f
+                val centerY = current.height / 2f
+                val images = extracted.frames.map { frame ->
+                    LayerImage(
+                        file = frame.file,
+                        sourceWidth = frame.width,
+                        sourceHeight = frame.height,
+                        centerX = centerX,
+                        centerY = centerY,
+                        width = displayWidth,
+                        height = displayHeight,
+                        rotation = 0f
+                    )
+                }
+                val insertion = ProjectOps.insertVideoReferenceFrames(
+                    project = current,
+                    startFrame = startFrame,
+                    images = images,
+                    layerName = "Video reference"
+                )
+                lastVideoStart = insertion.startFrame
+                lastVideoEnd = insertion.endFrame
+                videoImport = null
+                apply(insertion.project, insertion.startFrame, insertion.selectedLayer)
+                showHint(
+                    "Video reference · ${images.size} frames " +
+                        "(${insertion.startFrame + 1}–${insertion.endFrame + 1})"
+                )
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                videoImport = null
+                throw c
+            } catch (t: Throwable) {
+                videoImport = null
+                showHint(t.message ?: "Could not import that video")
+            }
+        }
+    }
+
+    fun cancelVideoImport() {
+        videoImportJob?.cancel()
+        videoImportJob = null
+        videoImport = null
     }
 
     fun cancelPlacement() {
@@ -495,11 +601,13 @@ class EditorModel(
 
     fun addFrame() {
         cancelActiveInk()
+        clearVideoRange()
         apply(ProjectOps.addFrameAfter(project, currentFrame), currentFrame + 1, currentLayer)
     }
 
     fun duplicateFrame() {
         cancelActiveInk()
+        clearVideoRange()
         apply(
             ProjectOps.duplicateFrameAfter(project, currentFrame),
             currentFrame + 1,
@@ -510,6 +618,7 @@ class EditorModel(
     fun moveFrame(from: Int, to: Int) {
         if (from == to) return
         cancelActiveInk()
+        clearVideoRange()
         val updated = ProjectOps.moveFrame(project, from, to)
         if (updated === project) return
         apply(updated, to, currentLayer)
@@ -518,6 +627,7 @@ class EditorModel(
     fun deleteFrame() {
         if (project.frames.size <= 1) return
         cancelActiveInk()
+        clearVideoRange()
         val target = (currentFrame - 1).coerceAtLeast(0)
         apply(ProjectOps.deleteFrame(project, currentFrame), target, currentLayer)
     }
@@ -679,6 +789,7 @@ class EditorModel(
 
     fun dispose() {
         if (disposed) return
+        videoImportJob?.cancel()
         saveNow()
         disposed = true
         exportJob?.cancel()
@@ -690,6 +801,7 @@ class EditorModel(
     fun discard() {
         discarded = true
         disposed = true
+        videoImportJob?.cancel()
         saveJob?.cancel()
         exportJob?.cancel()
     }

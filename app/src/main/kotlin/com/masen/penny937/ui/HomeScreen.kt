@@ -613,6 +613,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             TipRow("The sliders in the tool rail open brush and shape settings.")
             TipRow("Every frame has its own unlimited layers.")
             TipRow("Import a reference image from Layers, drag to place, pinch to scale and rotate. It locks itself and is never exported.")
+            TipRow("Import a video from Layers: it samples at the project fps and fills a locked reference into each frame. Import another to continue after the clip.")
             TipRow("Line, rectangle, square, ellipse and circle are one drag away.")
             TipRow("Grid and thirds guides live in the canvas corner.")
             TipRow("Canvas size, frame rate and paper are yours to choose.")
@@ -620,7 +621,7 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.4.2 · Made for stylus and patience",
+                "Version 1.5 · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
             )

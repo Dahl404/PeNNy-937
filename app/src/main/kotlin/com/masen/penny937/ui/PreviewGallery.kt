@@ -367,6 +367,7 @@ fun LayersSheetPreview() {
                 visible = true,
                 editor = model,
                 onImportReference = {},
+                onImportVideo = {},
                 onPositionReference = {},
                 onDismiss = {}
             )

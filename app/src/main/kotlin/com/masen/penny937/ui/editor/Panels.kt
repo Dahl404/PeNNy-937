@@ -497,6 +497,7 @@ fun BoxScope.LayersSheet(
     visible: Boolean,
     editor: EditorModel,
     onImportReference: () -> Unit,
+    onImportVideo: () -> Unit,
     onPositionReference: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -548,12 +549,22 @@ fun BoxScope.LayersSheet(
                 icon = PennyIcons.Image,
                 tint = palette.accent
             )
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton(
+                text = "Import reference video",
+                onClick = onImportVideo,
+                modifier = Modifier.fillMaxWidth(),
+                icon = PennyIcons.Video,
+                tint = palette.accent
+            )
             Spacer(Modifier.height(5.dp))
             Text(
-                "References are locked guides. They are not exported or played.",
+                "References are locked guides and are not exported or played. " +
+                    "Video clips are sampled at ${editor.project.fps} fps and fill frames from the current frame to the end of the clip.",
                 style = type.caption,
                 color = palette.textTertiary,
-                modifier = Modifier.padding(horizontal = 4.dp)
+                modifier = Modifier.padding(horizontal = 4.dp),
+                lineHeight = 16.sp
             )
             Spacer(Modifier.height(10.dp))
             LazyColumn(

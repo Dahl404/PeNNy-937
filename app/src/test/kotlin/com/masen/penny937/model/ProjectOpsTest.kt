@@ -149,6 +149,76 @@ class ProjectOpsTest {
         assertEquals(1, cleared.frames[0].layers[0].strokes.size)
     }
 
+    private fun videoImage(index: Int) = LayerImage(
+        file = "video-$index.jpg",
+        sourceWidth = 1600,
+        sourceHeight = 900,
+        centerX = 540f,
+        centerY = 960f,
+        width = 1080f,
+        height = 607.5f
+    )
+
+    @Test
+    fun videoReferencesFillFramesAndExtendTheTimeline() {
+        var p = project()
+        p = ProjectOps.addStroke(p, 0, 0, stroke())
+        val result = ProjectOps.insertVideoReferenceFrames(
+            p, 0, (0 until 3).map { videoImage(it) }, "Video reference"
+        )
+        assertEquals(3, result.project.frames.size)
+        assertEquals(0, result.startFrame)
+        assertEquals(2, result.endFrame)
+        assertEquals(1, result.selectedLayer)
+        for (i in 0..2) {
+            val frame = result.project.frames[i]
+            assertEquals(2, frame.layers.size)
+            assertTrue(frame.layers[0].isReference)
+            assertTrue(frame.layers[0].locked)
+            assertEquals("video-$i.jpg", frame.layers[0].image!!.file)
+            assertEquals(false, frame.layers[1].isReference)
+        }
+        assertEquals(1, result.project.frames[0].layers[1].strokes.size)
+    }
+
+    @Test
+    fun videoReferencesAppendFromTheCurrentFrameAndLeaveEarlierFramesAlone() {
+        var p = project()
+        p = ProjectOps.addFrameAfter(p, 0)
+        val before = p.frames[0]
+        val result = ProjectOps.insertVideoReferenceFrames(
+            p, 2, (0 until 2).map { videoImage(it) }, "Video reference"
+        )
+        assertEquals(4, result.project.frames.size)
+        assertEquals(2, result.startFrame)
+        assertEquals(3, result.endFrame)
+        assertEquals(before.layers.size, result.project.frames[0].layers.size)
+        assertTrue(result.project.frames[2].layers[0].isReference)
+        assertTrue(result.project.frames[3].layers[0].isReference)
+    }
+
+    @Test
+    fun videoOnAReferenceOnlyFrameCreatesADrawingLayer() {
+        var p = project()
+        p = ProjectOps.addReferenceLayer(
+            p, 0, ProjectFactory.referenceLayer("Reference", videoImage(9))
+        )
+        // Remove the original drawing layer, leaving only a reference.
+        p = ProjectOps.deleteLayer(p, 0, 1).first
+        assertEquals(1, p.frames[0].layers.size)
+        assertTrue(p.frames[0].layers[0].isReference)
+
+        val result = ProjectOps.insertVideoReferenceFrames(
+            p, 0, listOf(videoImage(0)), "Video reference"
+        )
+        val layers = result.project.frames[0].layers
+        assertEquals(3, layers.size)
+        assertTrue(layers[0].isReference)
+        assertTrue(layers[1].isReference)
+        assertEquals(false, layers[2].isReference)
+        assertEquals(2, result.selectedLayer)
+    }
+
     @Test
     fun deletingTheLastFrameIsIgnored() {
         val p = project()

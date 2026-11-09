@@ -414,6 +414,59 @@ object ProjectOps {
             if (it.locked || it.isReference) it else it.copy(strokes = emptyList())
         }
 
+    data class VideoInsertResult(
+        val project: Project,
+        val startFrame: Int,
+        val endFrame: Int,
+        val selectedLayer: Int
+    )
+
+    /**
+     * Adds one video reference layer to each frame from [startFrame] onwards,
+     * appending blank frames as needed. The returned endFrame is the last frame
+     * that received a reference; the next clip can continue at endFrame + 1.
+     */
+    fun insertVideoReferenceFrames(
+        project: Project,
+        startFrame: Int,
+        images: List<LayerImage>,
+        layerName: String
+    ): VideoInsertResult {
+        if (images.isEmpty()) {
+            return VideoInsertResult(project, startFrame, startFrame - 1, 0)
+        }
+        val frames = project.frames.toMutableList()
+        val start = startFrame.coerceIn(0, frames.size)
+        val base = project.frameAt(start.coerceAtMost(project.frames.lastIndex))
+        for (i in images.indices) {
+            val index = start + i
+            while (frames.size <= index) {
+                frames.add(ProjectFactory.blankFrameLike(base, frames.size))
+            }
+            val frame = frames[index]
+            val layer = ProjectFactory.referenceLayer(layerName, images[i])
+            frames[index] = frame.copy(layers = listOf(layer) + frame.layers)
+        }
+
+        val startFrameData = frames[start]
+        var layers = startFrameData.layers
+        var selected = layers.indexOfFirst { !it.isReference }
+        if (selected < 0) {
+            val editable = Layer(id = Ids.next(), name = "Layer 1")
+            layers = layers + editable
+            frames[start] = startFrameData.copy(layers = layers)
+            selected = layers.lastIndex
+        }
+
+        val updated = project.copy(frames = frames, updatedAt = System.currentTimeMillis())
+        return VideoInsertResult(
+            project = updated,
+            startFrame = start,
+            endFrame = start + images.size - 1,
+            selectedLayer = selected
+        )
+    }
+
     /** Inserts a reference image layer at the bottom of a frame. */
     fun addReferenceLayer(project: Project, frameIndex: Int, layer: Layer): Project =
         updateFrame(project, frameIndex) { frame ->

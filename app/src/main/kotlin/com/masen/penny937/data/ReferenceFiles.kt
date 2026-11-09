@@ -44,6 +44,15 @@ object ReferenceFiles {
         return bitmap
     }
 
+    fun saveJpeg(name: String, bitmap: Bitmap, quality: Int = 86): Boolean {
+        val folder = dir ?: return false
+        return runCatching {
+            FileOutputStream(File(folder, name)).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            }
+        }.getOrDefault(false)
+    }
+
     fun delete(name: String) {
         synchronized(this) { cache.remove(name) }
         dir?.let { File(it, name).delete() }

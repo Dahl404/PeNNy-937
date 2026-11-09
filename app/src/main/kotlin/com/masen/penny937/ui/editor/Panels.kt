@@ -1026,6 +1026,15 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
                 }
             }
 
+            if (editor.project.frames.any { frame -> frame.layers.any { it.isReference } }) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Reference layers are guides and will not be included in the export.",
+                    style = type.caption,
+                    color = palette.textTertiary,
+                    lineHeight = 16.sp
+                )
+            }
             Spacer(Modifier.height(16.dp))
             when (state) {
                 is ExportState.Idle, is ExportState.Failed -> {

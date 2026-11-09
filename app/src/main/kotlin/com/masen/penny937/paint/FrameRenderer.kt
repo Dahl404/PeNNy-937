@@ -138,8 +138,7 @@ class FrameRenderer {
 
     private class LayerEntry(
         var bitmap: Bitmap,
-        var drawnStrokes: Int,
-        var drawnImageHash: Int
+        var contentRevision: Int
     )
 
     private val layers = LinkedHashMap<Long, LayerEntry>(16, 0.75f, true)
@@ -160,19 +159,22 @@ class FrameRenderer {
 
     fun editableLayerBitmap(project: Project, layer: Layer): Bitmap {
         val entry = ensureEntry(project, layer)
-        val imageHash = layer.image?.hashCode() ?: 0
-        if (entry.drawnStrokes != layer.strokes.size || entry.drawnImageHash != imageHash) {
+        val revision = layer.contentRevision
+        if (entry.contentRevision != revision) {
             renderLayerInto(entry.bitmap, layer)
-            entry.drawnStrokes = layer.strokes.size
-            entry.drawnImageHash = imageHash
+            entry.contentRevision = revision
         }
         return entry.bitmap
     }
 
     fun cachedLayerBitmap(layer: Layer): Bitmap? = layers[layer.id]?.bitmap
 
-    fun noteStrokeCommitted(layerId: Long) {
-        layers[layerId]?.let { it.drawnStrokes += 1 }
+    /**
+     * The canvas already composited the stroke it just committed into the cached
+     * bitmap, so record the layer's new identity instead of re-rendering it.
+     */
+    fun noteStrokeCommitted(layer: Layer) {
+        layers[layer.id]?.let { it.contentRevision = layer.contentRevision }
     }
 
     fun invalidateComposites() {
@@ -265,7 +267,7 @@ class FrameRenderer {
             invalidateLayer(layer.id)
         }
         val bitmap = Bitmap.createBitmap(project.width, project.height, Bitmap.Config.ARGB_8888)
-        val entry = LayerEntry(bitmap, -1, Int.MIN_VALUE)
+        val entry = LayerEntry(bitmap, Int.MIN_VALUE)
         layers[layer.id] = entry
         layerBytes += bytesOf(bitmap)
         val iterator = layers.entries.iterator()

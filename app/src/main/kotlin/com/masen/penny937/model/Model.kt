@@ -121,6 +121,24 @@ data class Layer(
         for (s in strokes) h = h * 31 + s.pointCount + s.tool.ordinal
         h
     }
+
+    /**
+     * Identity of the pixels this layer renders to: everything except the blend
+     * settings, which are applied while compositing. Moving or replacing a stroke's
+     * points changes this even when the stroke count stays the same.
+     */
+    val contentRevision: Int by lazy {
+        var h = image?.hashCode() ?: 0
+        h = h * 31 + strokes.size
+        for (s in strokes) {
+            h = h * 31 + System.identityHashCode(s.points)
+            h = h * 31 + s.tool.ordinal
+            h = h * 31 + s.color
+            h = h * 31 + s.width.toBits()
+            h = h * 31 + s.opacity.toBits()
+        }
+        h
+    }
 }
 
 data class Frame(

@@ -316,10 +316,17 @@ class DrawingCanvasView @JvmOverloads constructor(
                 val layerSave = if (shiftLayer != null) canvas.save() else -1
                 if (shiftLayer != null) canvas.translate(shiftLayer.dx, shiftLayer.dy)
                 layerPaint.alpha = (displayOpacity * 255f).toInt().coerceIn(0, 255)
-                canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
+                val erasingHere = drawingOnActive && i == activeLayerIndex &&
+                    strokeTool == Tool.ERASER
+                if (erasingHere) {
+                    // The erased view replaces the layer, it does not sit on top of it.
+                    drawErasePreview(canvas, bitmap, displayOpacity)
+                } else {
+                    canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
+                }
 
-                if (drawingOnActive && i == activeLayerIndex) {
-                    drawLiveStroke(canvas, layer.opacity)
+                if (drawingOnActive && i == activeLayerIndex && !erasingHere) {
+                    drawLiveStroke(canvas, displayOpacity)
                 }
                 if (shiftLayer != null) canvas.restoreToCount(layerSave)
             }
@@ -951,7 +958,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         val stroke = active.snapshot()
         if (stroke.pointCount > 0 && strokeFrameIndex >= 0) {
             model.addStroke(stroke, strokeFrameIndex, activeLayerIndex)
-            model.renderer.noteStrokeCommitted(activeLayerId)
+            model.renderer.noteStrokeCommitted(model.layer)
         }
         resetStroke()
         invalidate()
@@ -1180,28 +1187,38 @@ class DrawingCanvasView @JvmOverloads constructor(
     /** Blends the buffered live stroke over the layer bitmap being edited. */
     private fun drawLiveStroke(canvas: Canvas, layerOpacity: Float) {
         val overlay = overlayBitmap ?: return
-        if (strokeTool == Tool.ERASER) {
-            // Cut the buffered mask out of this layer only: draw it into an isolated
-            // layer, then knock the mask out, so lower layers stay untouched.
-            val save = canvas.save()
-            canvas.clipRect(strokeBounds)
-            canvas.saveLayer(
-                strokeBounds.left, strokeBounds.top,
-                strokeBounds.right, strokeBounds.bottom,
-                null
-            )
-            activeBitmap?.let { canvas.drawBitmap(it, 0f, 0f, layerPaint) }
-            overlayCompositePaint.alpha = 255
-            overlayCompositePaint.xfermode =
-                android.graphics.PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-            canvas.drawBitmap(overlay, 0f, 0f, overlayCompositePaint)
-            overlayCompositePaint.xfermode = null
-            canvas.restoreToCount(save)
-        } else {
-            layerPaint.alpha = (strokeOpacity * layerOpacity * 255f).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
-            layerPaint.alpha = 255
-        }
+        // The overlay will end up inside the layer, so it carries the layer's own alpha.
+        layerPaint.alpha = (strokeOpacity * layerOpacity * 255f).toInt().coerceIn(0, 255)
+        canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
+        layerPaint.alpha = 255
+    }
+
+    /**
+     * Draws the layer being erased with the buffered mask cut out of it.
+     *
+     * The cut has to happen in an isolated layer: the mask is white-ish coverage, so
+     * `DST_OUT` would otherwise punch through the paper and the layers underneath.
+     */
+    private fun drawErasePreview(canvas: Canvas, layerBitmap: Bitmap, layerOpacity: Float) {
+        val overlay = overlayBitmap ?: return
+        val save = canvas.save()
+        canvas.clipRect(strokeBounds)
+        canvas.saveLayer(
+            strokeBounds.left, strokeBounds.top,
+            strokeBounds.right, strokeBounds.bottom,
+            null
+        )
+        layerPaint.alpha = (layerOpacity * 255f).toInt().coerceIn(0, 255)
+        canvas.drawBitmap(layerBitmap, 0f, 0f, layerPaint)
+        layerPaint.alpha = 255
+        overlayCompositePaint.alpha = 255
+        overlayCompositePaint.xfermode =
+            android.graphics.PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+        val rect = strokeRect
+        strokeBounds.roundOut(rect)
+        canvas.drawBitmap(overlay, rect, rect, overlayCompositePaint)
+        overlayCompositePaint.xfermode = null
+        canvas.restoreToCount(save)
     }
 
     private fun resetStroke() {

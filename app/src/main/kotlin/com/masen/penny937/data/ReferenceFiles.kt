@@ -51,13 +51,14 @@ object ReferenceFiles {
 
     /** Copy + downscale + EXIF-orient a picked image into app storage. */
     fun import(context: Context, uri: Uri): ImportedReference? {
-        val folder = dir ?: return null
+        val folder = dir ?: File(context.filesDir, "references").apply { mkdirs() }.also { dir = it }
         return runCatching {
             val resolver = context.contentResolver
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            resolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, bounds)
-            } ?: return null
+            // decodeStream returns null when only bounds were requested, so do not
+            // treat that null as a failed read.
+            val boundsStream = resolver.openInputStream(uri) ?: return null
+            boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
             val sample = sampleSize(bounds.outWidth, bounds.outHeight)
@@ -65,7 +66,8 @@ object ReferenceFiles {
                 inSampleSize = sample
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            var decoded = resolver.openInputStream(uri)?.use {
+            val decodeStream = resolver.openInputStream(uri) ?: return null
+            var decoded = decodeStream.use {
                 BitmapFactory.decodeStream(it, null, options)
             } ?: return null
 

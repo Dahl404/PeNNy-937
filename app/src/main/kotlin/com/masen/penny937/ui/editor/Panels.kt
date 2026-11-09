@@ -1110,13 +1110,6 @@ fun BoxScope.ProjectMenuSheet(
             )
             Spacer(Modifier.height(12.dp))
             ToggleRow(
-                title = "Onion skin",
-                subtitle = "Ghost the frames before and after",
-                checked = editor.onionEnabled,
-                onCheckedChange = { editor.toggleOnion() }
-            )
-            Spacer(Modifier.height(12.dp))
-            ToggleRow(
                 title = "Grid",
                 subtitle = "Guide lines over the paper",
                 checked = editor.gridEnabled,

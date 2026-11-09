@@ -280,6 +280,17 @@ object ProjectOps {
         return project.copy(frames = frames, updatedAt = System.currentTimeMillis())
     }
 
+    fun moveFrame(project: Project, from: Int, to: Int): Project {
+        if (from !in project.frames.indices) return project
+        if (project.frames.size < 2) return project
+        val target = to.coerceIn(0, project.frames.lastIndex)
+        if (from == target) return project
+        val frames = project.frames.toMutableList()
+        val frame = frames.removeAt(from)
+        frames.add(target, frame)
+        return project.copy(frames = frames, updatedAt = System.currentTimeMillis())
+    }
+
     fun deleteFrame(project: Project, frameIndex: Int): Project {
         if (project.frames.size <= 1) return project
         val frames = project.frames.toMutableList()

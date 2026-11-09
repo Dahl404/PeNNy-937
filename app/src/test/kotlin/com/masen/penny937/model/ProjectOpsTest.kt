@@ -86,6 +86,27 @@ class ProjectOpsTest {
     }
 
     @Test
+    fun moveFrameReordersTheTimeline() {
+        var p = project()
+        p = ProjectOps.addFrameAfter(p, 0)
+        p = ProjectOps.addFrameAfter(p, 1)
+        val ids = p.frames.map { it.id }
+        assertEquals(3, ids.size)
+
+        p = ProjectOps.moveFrame(p, 0, 2)
+        assertEquals(listOf(ids[1], ids[2], ids[0]), p.frames.map { it.id })
+
+        p = ProjectOps.moveFrame(p, 2, 0)
+        assertEquals(ids, p.frames.map { it.id })
+
+        val unchanged = ProjectOps.moveFrame(p, 99, 0)
+        assertEquals(ids, unchanged.frames.map { it.id })
+
+        val single = project()
+        assertEquals(single, ProjectOps.moveFrame(single, 0, 0))
+    }
+
+    @Test
     fun deletingTheLastFrameIsIgnored() {
         val p = project()
         assertEquals(1, ProjectOps.deleteFrame(p, 0).frames.size)

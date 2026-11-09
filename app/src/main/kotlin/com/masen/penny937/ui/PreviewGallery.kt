@@ -304,6 +304,7 @@ fun EditorGridPreview() {
         ).also {
             it.selectFrame(1)
             it.toggleGrid()
+            it.updateOnionStrength(-0.55f)
             it.chooseTool(Tool.SHAPE)
             it.chooseShape(com.masen.penny937.model.ShapeKind.CIRCLE)
         }

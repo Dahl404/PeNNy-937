@@ -59,7 +59,7 @@ class EditorModel(
         private set
     var stylusOnly by mutableStateOf(prefs.stylusOnly)
         private set
-    var onionEnabled by mutableStateOf(prefs.onionEnabled)
+    var onionStrength by mutableStateOf(prefs.onionStrength)
         private set
     var gridEnabled by mutableStateOf(prefs.gridEnabled)
         private set
@@ -240,9 +240,9 @@ class EditorModel(
         prefs.hintSeen = true
     }
 
-    fun toggleOnion() {
-        onionEnabled = !onionEnabled
-        prefs.onionEnabled = onionEnabled
+    fun updateOnionStrength(strength: Float) {
+        onionStrength = strength.coerceIn(-1f, 1f)
+        prefs.onionStrength = onionStrength
     }
 
     fun toggleGrid() {
@@ -285,6 +285,14 @@ class EditorModel(
             currentFrame + 1,
             currentLayer
         )
+    }
+
+    fun moveFrame(from: Int, to: Int) {
+        if (from == to) return
+        cancelActiveInk()
+        val updated = ProjectOps.moveFrame(project, from, to)
+        if (updated === project) return
+        apply(updated, to, currentLayer)
     }
 
     fun deleteFrame() {

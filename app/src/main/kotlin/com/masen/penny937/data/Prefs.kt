@@ -27,9 +27,9 @@ class Prefs(context: Context) {
         get() = sp?.getBoolean("stylusOnly", true) ?: true
         set(value) = write { putBoolean("stylusOnly", value) }
 
-    var onionEnabled: Boolean
-        get() = sp?.getBoolean("onion", true) ?: true
-        set(value) = write { putBoolean("onion", value) }
+    var onionStrength: Float
+        get() = sp?.getFloat("onionStrength", -0.45f) ?: -0.45f
+        set(value) = write { putFloat("onionStrength", value) }
 
     var hintSeen: Boolean
         get() = sp?.getBoolean("hintSeen", false) ?: false

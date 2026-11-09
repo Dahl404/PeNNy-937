@@ -279,22 +279,22 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
 
     private fun drawOnionSkins(canvas: Canvas, model: EditorModel, project: Project, frameIndex: Int) {
-        if (!model.onionEnabled) return
+        val strength = model.onionStrength
+        if (kotlin.math.abs(strength) < 0.01f) return
+        val dir = if (strength < 0f) -1 else 1
+        val index = frameIndex + dir
+        if (index !in project.frames.indices) return
+        val neighbor = project.frames[index]
+        if (neighbor.strokeCount == 0) return
         val targetWidth = min(project.width, 640)
-        val offsets = intArrayOf(-1, 1)
-        for (dir in offsets) {
-            val index = frameIndex + dir
-            if (index !in project.frames.indices) continue
-            val neighbor = project.frames[index]
-            if (neighbor.strokeCount == 0) continue
-            val bitmap = model.renderer.composite(project, neighbor, targetWidth, transparent = true)
-            onionPaint.colorFilter = PorterDuffColorFilter(
-                if (dir < 0) 0xFFFF7A45.toInt() else 0xFF3B9CFF.toInt(),
-                PorterDuff.Mode.SRC_IN
-            )
-            onionPaint.alpha = if (dir < 0) 92 else 74
-            canvas.drawBitmap(bitmap, null, bitmapRect, onionPaint)
-        }
+        val bitmap = model.renderer.composite(project, neighbor, targetWidth, transparent = true)
+        onionPaint.colorFilter = PorterDuffColorFilter(
+            if (dir < 0) 0xFF3B9CFF.toInt() else 0xFFFF5A48.toInt(),
+            PorterDuff.Mode.SRC_IN
+        )
+        onionPaint.alpha = (kotlin.math.abs(strength).coerceIn(0f, 1f) * 140f)
+            .toInt().coerceIn(3, 160)
+        canvas.drawBitmap(bitmap, null, bitmapRect, onionPaint)
         onionPaint.colorFilter = null
         onionPaint.alpha = 255
     }

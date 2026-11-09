@@ -4,12 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -44,17 +47,23 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.model.Frame
@@ -63,6 +72,7 @@ import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.FrameRasterizer
 import com.masen.penny937.ui.PennyHaptics
 import com.masen.penny937.ui.canvas.DrawingCanvasView
+import com.masen.penny937.ui.components.BipolarSlider
 import com.masen.penny937.ui.components.ColorCircle
 import com.masen.penny937.ui.components.PennyCard
 import com.masen.penny937.ui.components.PennyIconButton
@@ -73,6 +83,7 @@ import com.masen.penny937.ui.theme.LocalPennyType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private enum class EditorSheet { NONE, COLOR, BRUSH, LAYERS, SETTINGS, EXPORT, MENU, FRAME }
@@ -500,6 +511,9 @@ private fun EditorDock(
     val type = LocalPennyType.current
     val view = LocalView.current
     val listState = rememberLazyListState()
+    val frames = editor.project.frames
+    val lineThreshold = with(LocalDensity.current) { 2.dp.toPx() }
+    var drag by remember { mutableStateOf<FrameDrag?>(null) }
     LaunchedEffect(editor.currentFrame) {
         listState.animateScrollToItem(editor.currentFrame.coerceAtLeast(0))
     }
@@ -526,21 +540,11 @@ private fun EditorDock(
                         color = palette.textPrimary
                     )
                     Text(
-                        " / ${editor.project.frames.size}",
+                        " / ${frames.size}",
                         style = type.label,
                         color = palette.textTertiary
                     )
                     Spacer(Modifier.weight(1f))
-                    DockPill(
-                        icon = PennyIcons.Onion,
-                        label = "Onion",
-                        active = editor.onionEnabled,
-                        onClick = {
-                            PennyHaptics.tap(view)
-                            editor.toggleOnion()
-                        }
-                    )
-                    Spacer(Modifier.width(6.dp))
                     DockPill(
                         icon = PennyIcons.Layers,
                         label = "Layers ${editor.frame.layers.size}",
@@ -548,33 +552,128 @@ private fun EditorDock(
                         onClick = onLayers
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                LazyRow(
-                    state = listState,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    itemsIndexed(editor.project.frames) { index, frame ->
-                        FrameCard(
-                            project = editor.project,
-                            frame = frame,
-                            index = index,
-                            selected = index == editor.currentFrame,
-                            onClick = {
-                                PennyHaptics.tap(view)
-                                editor.selectFrame(index)
-                            },
-                            onLongClick = {
-                                PennyHaptics.select(view)
-                                editor.selectFrame(index)
-                                onFrameMenu()
+                Spacer(Modifier.height(3.dp))
+                OnionRow(editor)
+                Spacer(Modifier.height(7.dp))
+                Box(Modifier.fillMaxWidth()) {
+                    LazyRow(
+                        state = listState,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        itemsIndexed(frames, key = { _, frame -> frame.id }) { index, frame ->
+                            val isDragged = drag?.frameId == frame.id
+                            val cardWidth = frameCardWidth(editor.project)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        if (isDragged) {
+                                            scaleX = 1.05f
+                                            scaleY = 1.05f
+                                        }
+                                    }
+                                    .zIndex(if (isDragged) 2f else 0f)
+                                    .shadow(
+                                        elevation = if (isDragged) 10.dp else 0.dp,
+                                        shape = RoundedCornerShape(12.dp),
+                                        clip = false,
+                                        ambientColor = palette.shadow,
+                                        spotColor = palette.shadow
+                                    )
+                            ) {
+                                FrameCard(
+                                    project = editor.project,
+                                    frame = frame,
+                                    index = index,
+                                    selected = index == editor.currentFrame,
+                                    onClick = {
+                                        PennyHaptics.tap(view)
+                                        editor.selectFrame(index)
+                                    },
+                                    onLongClick = {
+                                        PennyHaptics.select(view)
+                                        editor.selectFrame(index)
+                                        onFrameMenu()
+                                    }
+                                )
+                                Spacer(Modifier.height(3.dp))
+                                FrameGrip(
+                                    width = cardWidth,
+                                    selected = index == editor.currentFrame,
+                                    dragging = isDragged,
+                                    onDragStart = { startOffset ->
+                                        val info = listState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { it.key == frame.id }
+                                        if (info != null) {
+                                            PennyHaptics.select(view)
+                                            drag = FrameDrag(
+                                                frameId = frame.id,
+                                                from = index,
+                                                startPointerX = info.offset + startOffset.x,
+                                                lineX = info.offset.toFloat()
+                                            )
+                                        }
+                                    },
+                                    onDrag = { amount ->
+                                        val current = drag
+                                        if (current != null && current.frameId == frame.id) {
+                                            val newOffset = current.offsetX + amount
+                                            val pointer = current.startPointerX + newOffset
+                                            val target = resolveFrameTarget(
+                                                pointerX = pointer,
+                                                from = current.from,
+                                                draggedId = current.frameId,
+                                                frames = frames,
+                                                visible = listState.layoutInfo.visibleItemsInfo
+                                            )
+                                            drag = current.copy(
+                                                offsetX = newOffset,
+                                                target = target?.first ?: current.target,
+                                                lineX = target?.second ?: current.lineX
+                                            )
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val current = drag
+                                        drag = null
+                                        if (current != null && current.frameId == frame.id &&
+                                            current.target != current.from
+                                        ) {
+                                            PennyHaptics.tap(view)
+                                            editor.moveFrame(current.from, current.target)
+                                        }
+                                    },
+                                    onDragCancel = { drag = null }
+                                )
                             }
-                        )
+                        }
+                        item(key = "add") {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                AddFrameCard(onClick = onAddFrame)
+                                Spacer(Modifier.height(17.dp))
+                            }
+                        }
                     }
-                    item {
-                        AddFrameCard(
-                            onClick = onAddFrame
-                        )
+                    val currentDrag = drag
+                    if (currentDrag != null && abs(currentDrag.offsetX) > lineThreshold) {
+                        Canvas(Modifier.matchParentSize()) {
+                            val x = currentDrag.lineX.coerceIn(
+                                2.dp.toPx(),
+                                size.width - 2.dp.toPx()
+                            )
+                            val top = 3.dp.toPx()
+                            val bottom = size.height - 3.dp.toPx()
+                            drawLine(
+                                color = palette.accent,
+                                start = Offset(x, top),
+                                end = Offset(x, bottom),
+                                strokeWidth = 2.dp.toPx(),
+                                cap = StrokeCap.Round
+                            )
+                            drawCircle(palette.accent, 3.dp.toPx(), Offset(x, top))
+                            drawCircle(palette.accent, 3.dp.toPx(), Offset(x, bottom))
+                        }
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -613,25 +712,11 @@ private fun EditorDock(
                         onClick = { editor.selectFrame(editor.currentFrame + 1) },
                         size = 34.dp,
                         iconSize = 18.dp,
-                        enabled = editor.currentFrame < editor.project.frames.lastIndex,
+                        enabled = editor.currentFrame < frames.lastIndex,
                         tint = palette.textSecondary,
                         contentDescription = "Next frame"
                     )
                     Spacer(Modifier.weight(1f))
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(palette.surfaceSunken)
-                            .clickable { onFrameMenu() }
-                            .padding(horizontal = 9.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            "Hold ×${editor.frame.hold}",
-                            style = type.caption.copy(fontWeight = FontWeight.SemiBold),
-                            color = palette.textSecondary
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
                     PennyIconButton(
                         icon = PennyIcons.Copy,
                         onClick = {
@@ -653,9 +738,91 @@ private fun EditorDock(
                         background = palette.accentSoft,
                         contentDescription = "Add frame"
                     )
+                    Spacer(Modifier.width(2.dp))
+                    PennyIconButton(
+                        icon = PennyIcons.More,
+                        onClick = onFrameMenu,
+                        size = 34.dp,
+                        iconSize = 17.dp,
+                        tint = palette.textSecondary,
+                        contentDescription = "Frame options"
+                    )
                 }
             }
         }
+    }
+}
+
+private data class FrameDrag(
+    val frameId: Long,
+    val from: Int,
+    val startPointerX: Float,
+    val offsetX: Float = 0f,
+    val target: Int = from,
+    val lineX: Float = 0f
+)
+
+private fun resolveFrameTarget(
+    pointerX: Float,
+    from: Int,
+    draggedId: Long,
+    frames: List<Frame>,
+    visible: List<LazyListItemInfo>
+): Pair<Int, Float>? {
+    val others = visible.filter { info ->
+        info.key != draggedId && frames.any { it.id == info.key }
+    }
+    if (others.isEmpty()) return null
+    val hovered = others.minByOrNull {
+        abs((it.offset + it.size / 2f) - pointerX)
+    } ?: return null
+    val hoveredIndex = frames.indexOfFirst { it.id == hovered.key }
+    if (hoveredIndex < 0) return null
+    val leftHalf = pointerX < hovered.offset + hovered.size / 2f
+    val gap = if (leftHalf) hoveredIndex else hoveredIndex + 1
+    val target = if (gap > from) gap - 1 else gap
+    val lineX = if (leftHalf) hovered.offset.toFloat() else (hovered.offset + hovered.size).toFloat()
+    return target to lineX
+}
+
+@Composable
+private fun OnionRow(editor: EditorModel) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val strength = editor.onionStrength
+    val active = abs(strength) > 0.01f
+    val forward = strength > 0f
+    val tint = when {
+        !active -> palette.textTertiary
+        forward -> Color(0xFFFF5A48)
+        else -> Color(0xFF3B9CFF)
+    }
+    val label = when {
+        !active -> "Off"
+        forward -> "Next ${(strength * 100).roundToInt()}%"
+        else -> "Last ${(-strength * 100).roundToInt()}%"
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            PennyIcons.Onion,
+            contentDescription = "Onion skin",
+            tint = tint,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            label,
+            style = type.caption,
+            color = tint,
+            maxLines = 1,
+            modifier = Modifier.width(62.dp)
+        )
+        Spacer(Modifier.width(2.dp))
+        BipolarSlider(
+            value = strength,
+            onValueChange = { editor.updateOnionStrength(it) },
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -706,9 +873,8 @@ private fun FrameCard(
 ) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
-    val aspect = project.width.toFloat() / project.height
     val height = 58.dp
-    val width = (58f * aspect).coerceIn(38f, 92f).dp
+    val width = frameCardWidth(project)
     val shape = RoundedCornerShape(9.dp)
     val ring by animateDpAsState(if (selected) 2.dp else 0.6.dp, label = "ring")
     Box(
@@ -753,6 +919,66 @@ private fun FrameCard(
                     style = type.caption.copy(fontSize = 9.sp),
                     color = Color.White
                 )
+            }
+        }
+    }
+}
+
+private fun frameCardWidth(project: Project): androidx.compose.ui.unit.Dp =
+    (58f * project.width.toFloat() / project.height).coerceIn(38f, 92f).dp
+
+@Composable
+private fun FrameGrip(
+    width: androidx.compose.ui.unit.Dp,
+    selected: Boolean,
+    dragging: Boolean,
+    onDragStart: (Offset) -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val startState = androidx.compose.runtime.rememberUpdatedState(onDragStart)
+    val dragState = androidx.compose.runtime.rememberUpdatedState(onDrag)
+    val endState = androidx.compose.runtime.rememberUpdatedState(onDragEnd)
+    val cancelState = androidx.compose.runtime.rememberUpdatedState(onDragCancel)
+    Box(
+        modifier = Modifier
+            .width(width)
+            .height(14.dp)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { startState.value(it) },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragState.value(amount.x)
+                    },
+                    onDragEnd = { endState.value() },
+                    onDragCancel = { cancelState.value() }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .width(28.dp)
+                .height(10.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(if (dragging) palette.accentSoft else palette.surfaceSunken),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(3) {
+                    Box(
+                        Modifier
+                            .size(2.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (selected || dragging) palette.accent
+                                else palette.textTertiary.copy(alpha = 0.55f)
+                            )
+                    )
+                }
             }
         }
     }

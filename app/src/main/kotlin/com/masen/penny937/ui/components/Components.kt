@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.abs
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -282,6 +283,114 @@ fun PennySlider(
             style = Stroke(width = 0.8.dp.toPx())
         )
         drawCircle(color = accent, radius = 3.4.dp.toPx(), center = Offset(cx, cy))
+    }
+}
+
+/**
+ * A centre-detented slider for the onion skin: -1 shows the previous frame,
+ * 0 is off, +1 shows the next frame. Only one direction is active at a time.
+ */
+@Composable
+fun BipolarSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    negativeColor: Color = Color(0xFF3B9CFF),
+    positiveColor: Color = Color(0xFFFF5A48)
+) {
+    val palette = LocalPenny.current
+    val v = value.coerceIn(-1f, 1f)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val thumbPx = 8.dp.toPx()
+                    val usable = (size.width - thumbPx * 2f).coerceAtLeast(1f)
+                    fun update(x: Float) {
+                        var nv = ((x - thumbPx) / usable) * 2f - 1f
+                        nv = nv.coerceIn(-1f, 1f)
+                        if (abs(nv) < 0.07f) nv = 0f
+                        onValueChange(nv)
+                    }
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    update(down.position.x)
+                    down.consume()
+                    var event = awaitPointerEvent()
+                    while (event.changes.any { it.pressed }) {
+                        update(event.changes.first().position.x)
+                        event.changes.forEach { it.consume() }
+                        event = awaitPointerEvent()
+                    }
+                }
+            }
+    ) {
+        val thumbPx = 8.dp.toPx()
+        val track = 4.dp.toPx()
+        val cy = size.height / 2f
+        val left = thumbPx
+        val right = size.width - thumbPx
+        val usable = (right - left).coerceAtLeast(1f)
+        val center = (left + right) / 2f
+        val x = center + v * usable / 2f
+        val radius = CornerRadius(track / 2f, track / 2f)
+
+        drawRoundRect(
+            color = palette.surfaceSunken,
+            topLeft = Offset(left, cy - track / 2f),
+            size = Size(usable, track),
+            cornerRadius = radius
+        )
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                listOf(negativeColor.copy(alpha = 0.42f), negativeColor.copy(alpha = 0.04f))
+            ),
+            topLeft = Offset(left, cy - track / 2f),
+            size = Size(center - left, track),
+            cornerRadius = radius
+        )
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                listOf(positiveColor.copy(alpha = 0.04f), positiveColor.copy(alpha = 0.42f))
+            ),
+            topLeft = Offset(center, cy - track / 2f),
+            size = Size(right - center, track),
+            cornerRadius = radius
+        )
+
+        val activeColor = when {
+            v < -0.005f -> negativeColor
+            v > 0.005f -> positiveColor
+            else -> palette.textTertiary
+        }
+        if (v < -0.005f) {
+            drawRoundRect(
+                color = negativeColor,
+                topLeft = Offset(x, cy - track / 2f),
+                size = Size((center - x).coerceAtLeast(0f), track),
+                cornerRadius = radius
+            )
+        } else if (v > 0.005f) {
+            drawRoundRect(
+                color = positiveColor,
+                topLeft = Offset(center, cy - track / 2f),
+                size = Size((x - center).coerceAtLeast(0f), track),
+                cornerRadius = radius
+            )
+        }
+        drawCircle(
+            color = palette.textTertiary.copy(alpha = 0.6f),
+            radius = 1.6.dp.toPx(),
+            center = Offset(center, cy)
+        )
+        drawCircle(
+            color = palette.shadow,
+            radius = thumbPx + 3.dp.toPx(),
+            center = Offset(x, cy + 1.dp.toPx())
+        )
+        drawCircle(color = Color.White, radius = thumbPx, center = Offset(x, cy))
+        drawCircle(color = activeColor, radius = 3.4.dp.toPx(), center = Offset(x, cy))
     }
 }
 

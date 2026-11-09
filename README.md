@@ -28,6 +28,7 @@ Gradle 9.8.2 (the wrapper handles Gradle).
 | Two fingers | Pinch zoom + pan |
 | Double tap (finger) | Toggle fit / 2.4× zoom |
 | Tap the active tool | Brush settings |
+| Drag the dots under a frame | Reorder frames in the timeline |
 | Long-press a frame | Frame actions (duplicate, delete, hold) |
 | Trackpad/mouse (stylus-only off) | Also draws |
 
@@ -45,7 +46,9 @@ frame actions and layers are always available.
   streamed during export.
 - **Editable canvas.** Width/height 32–4096 px, frame rate 1–60 fps, five paper
   presets. Changing size keeps strokes at their original pixel scale.
-- **Onion skin.** Previous frames are tinted warm, next frames cool.
+- **Onion skin.** A single centre-detented slider: slide left for a blue ghost of the
+  previous frame, right for a red ghost of the next. Centre is off, and only one
+  neighbour is shown at a time.
 - **Inks.** Pen (pressure taper), Pencil (procedurally generated graphite grain),
   Marker (single-pass translucent compositing so joints never double up), Eraser.
 - **Basic shapes.** Line, rectangle, square, ellipse and circle are drag-to-place

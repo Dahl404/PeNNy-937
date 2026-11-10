@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   Auto Backup rules for Android 11 and older.
+   References are large imported media files that can be re-imported; keeping them
+   out of the backup keeps the archive small and avoids restoring stale copies.
+   See https://developer.android.com/guide/topics/data/autobackup
+-->
+<full-backup-content>
+    <exclude domain="file" path="references/" />
+</full-backup-content>

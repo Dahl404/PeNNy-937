@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="56"
+        android:rotation="-13">
+        <!-- shadow -->
+        <path
+            android:fillColor="#14000000"
+            android:pathData="M47,44h24v34l-9,17a3.2,3.2 0 0,1 -6,0l-9,-17z" />
+        <!-- body -->
+        <path
+            android:fillColor="#1D1D1F"
+            android:pathData="M40,34a12,12 0 0,1 12,-12h4a12,12 0 0,1 12,12v42h-28z" />
+        <!-- nib -->
+        <path
+            android:fillColor="#1D1D1F"
+            android:pathData="M40,74h28l-11,19a3.4,3.4 0 0,1 -6,0z" />
+        <path
+            android:fillColor="#F7F1E3"
+            android:pathData="M51,88h6l-3,5.4z" />
+        <!-- collar -->
+        <path
+            android:fillColor="#0A84FF"
+            android:pathData="M40,63h28v9h-28z" />
+        <!-- face plate -->
+        <path
+            android:fillColor="#F7F1E3"
+            android:pathData="M44,36a10,10 0 0,1 20,0v20a10,10 0 0,1 -20,0z" />
+        <!-- eyes -->
+        <path
+            android:fillColor="#1D1D1F"
+            android:pathData="M48,43m-1.9,0a1.9,1.9 0,1 0,3.8 0a1.9,1.9 0,1 0,-3.8 0" />
+        <path
+            android:fillColor="#1D1D1F"
+            android:pathData="M60,43m-1.9,0a1.9,1.9 0,1 0,3.8 0a1.9,1.9 0,1 0,-3.8 0" />
+        <!-- smile -->
+        <path
+            android:pathData="M50,49q4,4.4 8,0"
+            android:strokeColor="#1D1D1F"
+            android:strokeLineCap="round"
+            android:strokeWidth="2" />
+        <!-- highlight -->
+        <path
+            android:fillColor="#33FFFFFF"
+            android:pathData="M44,34h3v26h-3z" />
+    </group>
+</vector>

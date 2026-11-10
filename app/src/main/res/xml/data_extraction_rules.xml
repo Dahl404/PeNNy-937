@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   Android 12+ backup / device-transfer rules.
+   References are large imported media files that can be re-imported; exclude them
+   from both cloud backups and direct device transfers.
+   See https://developer.android.com/guide/topics/data/autobackup#xml-changes
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="references/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="references/" />
+    </device-transfer>
+</data-extraction-rules>

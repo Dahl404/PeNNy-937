@@ -5,7 +5,6 @@ four inks, a timeline, and a paper you control. Powerful underneath: vector stro
 unlimited frames, unlimited layers per frame, editable canvas size and frame rate,
 onion skinning, pressure-sensitive inks, and lossless/Timeline exports.
 
-Penny is the mascot: a pen with a face, made of ink and a little patience.
 
 ## Build
 

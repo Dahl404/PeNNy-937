@@ -104,6 +104,8 @@ class EditorModel(
     var tool by mutableStateOf(prefs.lastTool)
         private set
     var color by mutableStateOf(prefs.lastColor)
+    var customSwatches by mutableStateOf(prefs.customSwatches())
+        private set
     var size by mutableStateOf(prefs.sizeFor(prefs.lastTool))
         private set
     var markerOpacity by mutableStateOf(prefs.opacityFor(Tool.MARKER))
@@ -808,16 +810,26 @@ class EditorModel(
         prefs.lastColor = value
     }
 
-    /** Eyedropper: live sampler for the currently selected layer only. */
+    /** Stores one of the six user swatches; null clears it back to a blank slot. */
+    fun setCustomSwatch(index: Int, value: Int?) {
+        if (index !in 0 until Prefs.CUSTOM_SWATCH_COUNT) return
+        prefs.setCustomSwatch(index, value)
+        customSwatches = prefs.customSwatches()
+    }
+
+    /** Eyedropper: live sampler for one chosen layer, independent of the active layer. */
     private var eyedropperFound = false
 
-    fun beginEyedropper(): Boolean {
+    fun beginEyedropper(layerId: Long? = null): Boolean {
         if (eyedropper != null) return true
         if (morph != null) return false
         if (placement != null || importingReference || videoImport != null) return false
         if (isPlaying) stopPlayback()
         cancelActiveInk()
-        val target = layer
+        val frame = project.frameAt(currentFrame)
+        val target = layerId
+            ?.let { id -> frame.layers.firstOrNull { it.id == id } }
+            ?: layer
         hint = null
         eyedropper = EyedropperState(
             frameIndex = currentFrame,

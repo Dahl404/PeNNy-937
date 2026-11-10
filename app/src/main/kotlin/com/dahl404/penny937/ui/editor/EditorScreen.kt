@@ -359,10 +359,10 @@ fun EditorScreen(
             visible = sheet == EditorSheet.COLOR,
             editor = editor,
             onDismiss = { sheet = EditorSheet.NONE },
-            onPickFromLayer = {
+            onPickFromLayer = { layerId ->
                 sheet = EditorSheet.NONE
                 PennyHaptics.tap(view)
-                editor.beginEyedropper()
+                editor.beginEyedropper(layerId)
             }
         )
         BrushSheet(visible = sheet == EditorSheet.BRUSH, editor = editor) {

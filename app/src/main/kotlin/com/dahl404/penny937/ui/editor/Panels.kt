@@ -4,15 +4,21 @@ import android.graphics.Color as AColor
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +35,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,14 +51,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dahl404.penny937.editor.EditorModel
@@ -59,6 +71,7 @@ import com.dahl404.penny937.export.ExportFormat
 import com.dahl404.penny937.export.VideoPlan
 import com.dahl404.penny937.model.Frame
 import com.dahl404.penny937.model.GridStyle
+import com.dahl404.penny937.model.Layer
 import com.dahl404.penny937.model.ProjectFactory
 import com.dahl404.penny937.model.ShapeKind
 import com.dahl404.penny937.model.Stroke
@@ -87,9 +100,12 @@ import com.dahl404.penny937.ui.icons.PennyIcons
 import com.dahl404.penny937.ui.icons.shapeIcon
 import com.dahl404.penny937.ui.theme.LocalPenny
 import com.dahl404.penny937.ui.theme.LocalPennyType
+import com.dahl404.penny937.ui.theme.PennyDimens
 import com.dahl404.penny937.ui.theme.PennyMotion
 import androidx.compose.ui.platform.LocalContext
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -106,11 +122,10 @@ private val InkSwatches = listOf(
     0xFF007AFF,
     0xFF5856D6,
     0xFFAF52DE,
-    0xFFFF2D55,
-    0xFF8B5A2B
+    0xFFFF2D55
 ).map { it.toInt() }
 
-private val Rainbow = listOf(
+private val HueWheelColors = listOf(
     Color(0xFFFF3B30),
     Color(0xFFFFCC00),
     Color(0xFF34C759),
@@ -130,7 +145,7 @@ fun BoxScope.ColorSheet(
     visible: Boolean,
     editor: EditorModel,
     onDismiss: () -> Unit,
-    onPickFromLayer: () -> Unit
+    onPickFromLayer: (Long) -> Unit
 ) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
@@ -138,26 +153,65 @@ fun BoxScope.ColorSheet(
     var hue by remember { mutableFloatStateOf(initial[0]) }
     var sat by remember { mutableFloatStateOf(initial[1]) }
     var value by remember { mutableFloatStateOf(initial[2]) }
+    var sampleLayerId by remember { mutableStateOf<Long?>(null) }
+    var sampleMenuOpen by remember { mutableStateOf(false) }
+    var editingSwatch by remember { mutableStateOf<Int?>(null) }
+    val layers = editor.frame.layers
+    val sampleLayer = sampleLayerId
+        ?.let { id -> layers.firstOrNull { it.id == id } }
+        ?: editor.layer
     androidx.compose.runtime.LaunchedEffect(visible) {
         if (visible) {
+            sampleMenuOpen = false
+            editingSwatch = null
             AColor.colorToHSV(editor.color, initial)
             hue = initial[0]
             sat = initial[1]
             value = initial[2]
+        } else {
+            sampleMenuOpen = false
+            editingSwatch = null
         }
     }
 
     fun commit() {
-        editor.chooseColor(hsvColor(hue, sat, value))
+        val next = hsvColor(hue, sat, value)
+        editor.chooseColor(next)
+        editingSwatch?.let { editor.setCustomSwatch(it, next) }
     }
 
-    fun select(color: Int) {
+    fun applyColor(color: Int) {
         val hsv = FloatArray(3)
         AColor.colorToHSV(color, hsv)
         hue = hsv[0]
         sat = hsv[1]
         value = hsv[2]
         editor.chooseColor(color)
+    }
+
+    fun select(color: Int) {
+        applyColor(color)
+        editingSwatch = null
+    }
+
+    fun tapCustomSwatch(index: Int) {
+        val saved = editor.customSwatches.getOrNull(index)
+        if (saved == null) {
+            editor.setCustomSwatch(index, editor.color)
+            editingSwatch = null
+        } else {
+            applyColor(saved)
+            editingSwatch = null
+        }
+    }
+
+    fun editCustomSwatch(index: Int) {
+        val saved = editor.customSwatches.getOrNull(index) ?: editor.color
+        if (editor.customSwatches.getOrNull(index) == null) {
+            editor.setCustomSwatch(index, saved)
+        }
+        editingSwatch = index
+        applyColor(saved)
     }
 
     PennySheet(
@@ -190,30 +244,113 @@ fun BoxScope.ColorSheet(
             }
 
             Spacer(Modifier.height(14.dp))
-            SecondaryButton(
-                text = "Pick from ${editor.layer.name}",
-                icon = PennyIcons.Eyedropper,
-                onClick = onPickFromLayer,
-                modifier = Modifier.fillMaxWidth()
-            )
+            SectionLabel("COLOR PICKER")
             Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.weight(1f)) {
+                    val pickerShape = RoundedCornerShape(14.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(pickerShape)
+                            .background(palette.surface)
+                            .border(PennyDimens.hairline, palette.hairline, pickerShape)
+                            .clickable { sampleMenuOpen = true }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            PennyIcons.Eyedropper,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp),
+                            tint = palette.accent
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "SAMPLE FROM",
+                                style = type.caption,
+                                color = palette.textTertiary
+                            )
+                            Text(
+                                sampleLayer.name,
+                                style = type.label,
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            PennyIcons.ChevronDown,
+                            contentDescription = "Choose a layer to sample",
+                            modifier = Modifier.size(16.dp),
+                            tint = palette.textSecondary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = sampleMenuOpen,
+                        onDismissRequest = { sampleMenuOpen = false }
+                    ) {
+                        for (layer in layers.reversed()) {
+                            val isSource = layer.id == sampleLayer.id
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            layer.name,
+                                            style = type.bodyStrong,
+                                            color = if (isSource) palette.accent else palette.textPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            layerDescriptor(editor, layer),
+                                            style = type.caption,
+                                            color = palette.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                },
+                                trailingIcon = if (isSource) {
+                                    {
+                                        Icon(
+                                            PennyIcons.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = palette.accent
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    sampleLayerId = layer.id
+                                    sampleMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+                }
+                SecondaryButton(
+                    text = "Pick",
+                    icon = PennyIcons.Eyedropper,
+                    onClick = { onPickFromLayer(sampleLayer.id) },
+                    modifier = Modifier.width(96.dp)
+                )
+            }
+            Spacer(Modifier.height(7.dp))
             Text(
-                "Samples only the selected layer — match ink you already drew, " +
-                    "or a reference image.",
+                "Samples only ${sampleLayer.name}; you keep drawing on ${editor.layer.name}.",
                 style = type.caption,
                 color = palette.textTertiary,
                 lineHeight = 16.sp
             )
 
             Spacer(Modifier.height(18.dp))
-            SliderBlock(label = "Hue", valueText = "${hue.roundToInt()}°") {
-                PennySlider(
-                    value = hue,
-                    onValueChange = { hue = it; commit() },
-                    valueRange = 0f..360f,
-                    trackColors = Rainbow
-                )
-            }
             SliderBlock(
                 label = "Saturation",
                 valueText = "${(sat * 100).roundToInt()}%"
@@ -242,23 +379,224 @@ fun BoxScope.ColorSheet(
             Spacer(Modifier.height(14.dp))
             SectionLabel("SWATCHES")
             Spacer(Modifier.height(10.dp))
-            val rows = InkSwatches.chunked(7)
-            for ((rowIndex, row) in rows.withIndex()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    for (color in row) {
-                        ColorCircle(
-                            color = Color(color),
-                            size = 30.dp,
-                            selected = editor.color == color,
-                            onClick = { select(color) }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columnGap = 14.dp
+                // Keep the swatch grid at least six readable columns wide; the wheel
+                // takes what is left, capped at roughly twice its old 108.dp size.
+                val wheelSize = (maxWidth - 186.dp - columnGap).coerceIn(80.dp, 216.dp)
+                val swatchArea = maxWidth - wheelSize - columnGap
+                val swatchSize = ((swatchArea - 15.dp) / 6f).coerceIn(22.dp, 36.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(columnGap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(18.dp)
+                    ) {
+                        repeat(3) { rowIndex ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (column in 0 until 4) {
+                                    val color = InkSwatches[column * 3 + rowIndex]
+                                    ColorCircle(
+                                        color = Color(color),
+                                        size = swatchSize,
+                                        selected = editor.color == color,
+                                        onClick = { select(color) }
+                                    )
+                                }
+                                for (customColumn in 0 until 2) {
+                                    val index = customColumn * 3 + rowIndex
+                                    CustomSwatchSlot(
+                                        color = editor.customSwatches.getOrNull(index),
+                                        size = swatchSize,
+                                        selected = editingSwatch == index,
+                                        onClick = { tapCustomSwatch(index) },
+                                        onLongClick = { editCustomSwatch(index) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.width(wheelSize),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "HUE · ${hue.roundToInt()}°",
+                            style = type.caption,
+                            color = palette.textTertiary
+                        )
+                        Spacer(Modifier.height(5.dp))
+                        HueWheel(
+                            hue = hue,
+                            color = Color(hsvColor(hue, sat, value)),
+                            onHueChange = { hue = it; commit() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
                         )
                     }
                 }
-                if (rowIndex != rows.lastIndex) Spacer(Modifier.height(12.dp))
             }
             Spacer(Modifier.height(8.dp))
+            Text(
+                if (editingSwatch != null) {
+                    "Editing a custom swatch — the wheel and sliders now set it."
+                } else {
+                    "Tap a custom slot to save the current ink; hold it to edit with the wheel."
+                },
+                style = type.caption,
+                color = if (editingSwatch != null) palette.accent else palette.textTertiary,
+                lineHeight = 16.sp
+            )
         }
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CustomSwatchSlot(
+    color: Int?,
+    size: Dp,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val shape = CircleShape
+    val ringWidth by animateDpAsState(
+        targetValue = if (selected) 2.dp else 1.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "customSwatchRing"
+    )
+    val ringColor by animateColorAsState(
+        targetValue = if (selected) palette.accent else palette.hairlineStrong,
+        animationSpec = PennyMotion.color(),
+        label = "customSwatchRingColor"
+    )
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(shape)
+            .background(if (color == null) palette.surfaceSunken else Color(color))
+            .border(ringWidth, ringColor, shape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (color == null) {
+            Icon(
+                PennyIcons.Plus,
+                contentDescription = "Empty custom color",
+                modifier = Modifier.size(11.dp),
+                tint = palette.textTertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun HueWheel(
+    hue: Float,
+    color: Color,
+    onHueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalPenny.current
+    Canvas(
+        modifier = modifier
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    fun update(position: Offset) {
+                        val dx = position.x - cx
+                        val dy = position.y - cy
+                        if (dx * dx + dy * dy < 1f) return
+                        val angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
+                        onHueChange(if (angle < 0f) angle + 360f else angle)
+                    }
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    update(down.position)
+                    down.consume()
+                    var event = awaitPointerEvent()
+                    while (event.changes.any { it.pressed }) {
+                        update(event.changes.first().position)
+                        event.changes.forEach { it.consume() }
+                        event = awaitPointerEvent()
+                    }
+                }
+            }
+    ) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val center = Offset(cx, cy)
+        val wheelSize = min(size.width, size.height)
+        val ringWidth = (wheelSize * 0.16f).coerceAtLeast(12.dp.toPx())
+        val radius = wheelSize / 2f - ringWidth / 2f - 1.dp.toPx()
+
+        drawCircle(
+            brush = Brush.sweepGradient(HueWheelColors),
+            radius = radius,
+            center = center,
+            style = DrawStroke(width = ringWidth)
+        )
+        drawCircle(
+            color = palette.hairlineStrong,
+            radius = radius + ringWidth / 2f,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+        drawCircle(
+            color = palette.hairlineStrong,
+            radius = radius - ringWidth / 2f,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+
+        val innerRadius = radius - ringWidth / 2f - 2.dp.toPx()
+        drawCircle(color = color, radius = innerRadius, center = center)
+        drawCircle(
+            color = palette.hairline,
+            radius = innerRadius,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+
+        val angle = Math.toRadians(hue.toDouble()).toFloat()
+        val thumb = Offset(cx + cos(angle) * radius, cy + sin(angle) * radius)
+        drawCircle(
+            color = palette.shadow,
+            radius = ringWidth * 0.66f,
+            center = Offset(thumb.x, thumb.y + 1.dp.toPx())
+        )
+        drawCircle(color = Color.White, radius = ringWidth * 0.62f, center = thumb)
+        drawCircle(
+            color = Color(hsvColor(hue, 1f, 1f)),
+            radius = ringWidth * 0.38f,
+            center = thumb
+        )
+    }
+}
+
+private fun layerDescriptor(editor: EditorModel, layer: Layer): String {
+    val parts = buildList {
+        if (layer.id == editor.layer.id) add("Active layer")
+        if (layer.isReference) add("Reference")
+        if (!layer.visible) add("Hidden")
+        if (isEmpty()) {
+            add(
+                if (layer.strokes.size == 1) "1 stroke"
+                else "${layer.strokes.size} strokes"
+            )
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable

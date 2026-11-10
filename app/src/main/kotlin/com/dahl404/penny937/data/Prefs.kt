@@ -83,4 +83,21 @@ class Prefs(context: Context) {
 
     fun setOpacityFor(tool: Tool, opacity: Float) =
         write { putFloat("opacity_${tool.name}", opacity) }
+
+    fun customSwatch(index: Int): Int? {
+        val preferences = sp ?: return null
+        val key = "swatch_$index"
+        return if (preferences.contains(key)) preferences.getInt(key, 0) else null
+    }
+
+    fun setCustomSwatch(index: Int, color: Int?) = write {
+        val key = "swatch_$index"
+        if (color == null) remove(key) else putInt(key, color)
+    }
+
+    fun customSwatches(): List<Int?> = List(CUSTOM_SWATCH_COUNT) { customSwatch(it) }
+
+    companion object {
+        const val CUSTOM_SWATCH_COUNT = 6
+    }
 }

@@ -267,7 +267,7 @@ fun ColorSheetPreview() {
                 visible = true,
                 editor = model,
                 onDismiss = {},
-                onPickFromLayer = {}
+                onPickFromLayer = { _ -> }
             )
         }
     }

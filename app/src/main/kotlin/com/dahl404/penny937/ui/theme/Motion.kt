@@ -38,9 +38,15 @@ object PennyMotion {
     fun pressFloat(): SpringSpec<Float> =
         spring(dampingRatio = 0.74f, stiffness = 900f, visibilityThreshold = 0.001f)
 
-    /** Selection rings and chevrons; the settle is barely perceptible. */
+    /**
+     * Selection rings and chevrons; the settle is barely perceptible.
+     *
+     * Critically damped on purpose: these values feed into padding and border
+     * widths, where an overshoot below zero throws. A bouncy ring is not worth a
+     * crash when a selection animation starts from a non-zero value.
+     */
     fun settleDp(): SpringSpec<Dp> =
-        spring(dampingRatio = 0.9f, stiffness = 420f, visibilityThreshold = 0.01.dp)
+        spring(dampingRatio = 1f, stiffness = 420f, visibilityThreshold = 0.01.dp)
 
     /** Larger surfaces: floating windows, toggles, layout size changes. */
     fun gentleDp(): SpringSpec<Dp> =

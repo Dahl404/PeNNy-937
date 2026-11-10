@@ -563,10 +563,12 @@ fun ColorCircle(
         animationSpec = PennyMotion.settleDp(),
         label = "colorRingInset"
     )
+    // Animated Dp values can undershoot while a target changes mid-flight. Padding
+    // and border widths reject negatives, so clamp here as a final guard.
     val modifier = Modifier
         .size(size)
-        .border(borderWidth, borderColor, shape)
-        .padding(inset)
+        .border(borderWidth.coerceAtLeast(0.dp), borderColor, shape)
+        .padding(inset.coerceAtLeast(0.dp))
         .clip(shape)
         .background(color)
         .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)

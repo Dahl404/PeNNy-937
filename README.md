@@ -77,11 +77,15 @@ Fit and grid float in the opposite corner.
   or onion-skinned; *in export* references become footage under your drawing, for
   editing an existing clip or animating on top of a still. Unlock to reposition or
   delete.
-- **Layer eyedropper.** Open Color and choose *Pick from Layer 1* to sample ink
-  directly from the selected layer — including a reference image. A floating loupe
-  previews the live color while you drag; lift to keep, or cancel to revert. Other
-  layers are ignored, so the picked color is the ink you actually tapped, not the
-  blended composite.
+- **Layer eyedropper.** Open Color, choose a source in the *Sample from* dropdown
+  — any layer in the frame, including a reference image, while you keep drawing on
+  the active layer — then tap *Pick*. A floating loupe previews the live color while
+  you drag; lift to keep, or cancel to revert. Other layers are ignored, so the
+  picked color is the ink you actually tapped, not the blended composite.
+- **Color wheel and custom swatches.** Hue is a wheel beside the evenly spaced
+  swatches; Saturation and Brightness stay as sliders. The six dashed custom slots
+  save the current ink on tap, recall it on the next tap, and open the wheel for
+  live editing when held.
 - **Reference video.** Import a clip from Layers; it is sampled at the project frame
   rate (for example 10s at 12fps = 120 references) and each sample becomes a locked
   reference layer on its own timeline frame, extending the animation as needed.

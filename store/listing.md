@@ -8,42 +8,46 @@ Paste-ready text. Limits: name 30, short description 80, full description 4000.
 PeNNy-937
 ```
 
-## Short description (66 / 80)
+## Short description (71 / 80)
 
 ```
-Draw animation frame by frame with a stylus. Vectors, layers, MP4.
+Free, open source hand-drawn animation. No ads, no account, no network.
 ```
 
-## Full description (1406 / 4 000)
+## Full description (1632 / 4 000)
 
 ```
-PeNNy-937 is a drawing app for people who animate by hand.
+Most animation apps on Android want something from you: an account, a
+subscription, an ad before every undo, or access to your contacts.
+
+PeNNy-937 wants none of it. It is free, open source, and asks for no account, no
+ads, no purchases, no tracking and no permissions. It does not even hold the
+internet permission, so it could not phone home if it tried. The source code is
+on GitHub, so you can check all of that yourself.
+
+What it is: a frame-by-frame animation studio for drawing by hand on a phone or
+tablet with a stylus.
 
 You draw a frame, flip to the next, draw it again, and the sequence starts to
-move. Onion skin keeps the previous drawing faintly behind the one you are
-making, so the next pose is a small correction instead of a guess.
+move. Onion skin keeps the previous drawing faintly behind yours, so the next
+pose is a small correction instead of a guess.
 
-Everything you draw is a vector, not pixels. Work at whatever zoom is
-comfortable, change the canvas size later, or export bigger than your screen:
-the ink is re-rendered from the strokes at whatever size you ask for, so it
-never goes soft.
+Everything you draw is a vector. Work at whatever zoom is comfortable, change
+the canvas size later, or export bigger than your screen: the ink is re-rendered
+from the strokes at whatever size you ask for, so it never goes soft.
 
-Work is organised the way hand-drawn animation is: frames along a timeline, each
-with its own stack of layers. Duplicate a pose to start the next one, hide a
-layer to see what is underneath, or bring a photo in as a locked guide you
-cannot accidentally draw on. Import a video and it becomes one reference frame
-per timeline step, which is the quick way to rotoscope footage you already shot.
+Frames sit on a timeline, each with its own stack of layers. Duplicate a pose to
+start the next one, hide a layer to see what is underneath, or bring a photo in
+as a locked guide you cannot accidentally draw on. Import a video and it becomes
+one reference frame per timeline step, which is the quick way to rotoscope
+footage you already have.
 
 When it moves the way you want it, export it: MP4, GIF, a PNG sequence, or the
 current drawing as a still.
 
-The app asks for no permissions at all, does not even hold the internet
-permission, and has no account, no ads and no tracking. Your work lives in the
-app's own folder and goes nowhere else.
-
-It is made for a stylus: pressure, tilt and the pen's side button are read
-directly, and a palm resting on the screen is ignored. It works with a finger
-too.
+The whole download is under 9 MB. Your work lives in the app's own folder and
+goes nowhere else. If something is missing or wrong, open an issue on GitHub and
+it can actually be fixed.
 
 Requires Android 8.0 or newer.
 ```

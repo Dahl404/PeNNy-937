@@ -19,7 +19,7 @@ android {
     applicationId = "com.masen.penny937"
     minSdk = 26
     targetSdk = 37
-    versionCode = 10
+    versionCode = 11
     versionName = "1.7"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -14,7 +14,7 @@ PeNNy-937
 Free, open source animation for Android. No ads, no account, no network.
 ```
 
-## Full description (1700 / 4 000)
+## Full description (1706 / 4 000)
 
 ```
 Most animation apps on Android want something from you: an account, a
@@ -24,28 +24,28 @@ PeNNy-937 wants nothing. Free, open source, no account, no ads, no purchases,
 no tracking, no permissions, and not even the internet permission, so it could
 not send your work anywhere if it tried. The source is on GitHub.
 
-Three things it does that most of them do not:
+Three things it does that most of them do not.
 
-**Strokes stay vectors.** Draw at whatever zoom suits your hand, change the
-canvas size afterwards, or render out larger than your screen. The ink is
-re-rendered from the strokes at the size you ask for, so a line stays a line at
-4K. Most drawing apps fix the project size once and rasterise it forever.
+Strokes stay vectors: draw at whatever zoom suits your hand, change the canvas
+size afterwards, or render out larger than your screen. The ink is re-rendered
+from the strokes at the size you ask for, so a line stays a line at 4K. Most
+drawing apps fix the project size once and rasterise it forever.
 
-**Video becomes a reference per timeline step.** Import footage you already
-shot and you get one locked reference layer on each frame, at your project frame
+Video becomes a reference on every timeline step: import footage you already
+shot and you get one locked reference layer per frame, at your project frame
 rate. Photos work the same way as a single guide. References are never drawn on
-by accident and never exported unless you want them in the render.
+by accident, and never exported unless you ask for them in the render.
 
-**The stylus is read raw.** Pressure and tilt taper the line, the pen's side
-button erases for exactly one stroke without changing tools, and a palm on the
-glass is ignored instead of leaving a smear.
+The stylus is read raw: pressure and tilt taper the line, the pen's side button
+erases for exactly one stroke without changing tools, and a palm on the glass is
+ignored instead of leaving a smear.
 
-The rest is what you would want anyway: layers inside each drawing with merge
-down, onion skin one neighbour at a time, line/rect/ellipse/circle shapes, move
-and rotate, an eyedropper that samples the layer you picked rather than the
-flattened image, and export to MP4, GIF, a PNG sequence or a single still.
-Projects autosave as compact documents and can be zipped with every reference
-inside.
+The rest is what you would want anyway. Layers inside each drawing, with merge
+down. Onion skin, one neighbour at a time. Line, rectangle, ellipse and circle
+shapes, move and rotate, and an eyedropper that samples the layer you picked
+rather than the flattened image. Export to MP4, GIF, a PNG sequence or a single
+still. Projects autosave as compact documents and can be zipped with every
+reference inside.
 
 8.7 MB. Android 8.0 or newer. No account to create, no network to be offline
 from.

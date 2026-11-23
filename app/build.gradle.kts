@@ -19,7 +19,7 @@ android {
     applicationId = "com.masen.penny937"
     minSdk = 26
     targetSdk = 37
-    versionCode = 12
+    versionCode = 13
     versionName = "1.7"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -37,7 +37,8 @@ android {
 
   buildTypes {
     release {
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }

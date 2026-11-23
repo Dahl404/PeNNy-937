@@ -8,48 +8,47 @@ Paste-ready text. Limits: name 30, short description 80, full description 4000.
 PeNNy-937
 ```
 
-## Short description (71 / 80)
+## Short description (72 / 80)
 
 ```
-Free, open source hand-drawn animation. No ads, no account, no network.
+Free, open source animation for Android. No ads, no account, no network.
 ```
 
-## Full description (1632 / 4 000)
+## Full description (1700 / 4 000)
 
 ```
 Most animation apps on Android want something from you: an account, a
 subscription, an ad before every undo, or access to your contacts.
 
-PeNNy-937 wants none of it. It is free, open source, and asks for no account, no
-ads, no purchases, no tracking and no permissions. It does not even hold the
-internet permission, so it could not phone home if it tried. The source code is
-on GitHub, so you can check all of that yourself.
+PeNNy-937 wants nothing. Free, open source, no account, no ads, no purchases,
+no tracking, no permissions, and not even the internet permission, so it could
+not send your work anywhere if it tried. The source is on GitHub.
 
-What it is: a frame-by-frame animation studio for drawing by hand on a phone or
-tablet with a stylus.
+Three things it does that most of them do not:
 
-You draw a frame, flip to the next, draw it again, and the sequence starts to
-move. Onion skin keeps the previous drawing faintly behind yours, so the next
-pose is a small correction instead of a guess.
+**Strokes stay vectors.** Draw at whatever zoom suits your hand, change the
+canvas size afterwards, or render out larger than your screen. The ink is
+re-rendered from the strokes at the size you ask for, so a line stays a line at
+4K. Most drawing apps fix the project size once and rasterise it forever.
 
-Everything you draw is a vector. Work at whatever zoom is comfortable, change
-the canvas size later, or export bigger than your screen: the ink is re-rendered
-from the strokes at whatever size you ask for, so it never goes soft.
+**Video becomes a reference per timeline step.** Import footage you already
+shot and you get one locked reference layer on each frame, at your project frame
+rate. Photos work the same way as a single guide. References are never drawn on
+by accident and never exported unless you want them in the render.
 
-Frames sit on a timeline, each with its own stack of layers. Duplicate a pose to
-start the next one, hide a layer to see what is underneath, or bring a photo in
-as a locked guide you cannot accidentally draw on. Import a video and it becomes
-one reference frame per timeline step, which is the quick way to rotoscope
-footage you already have.
+**The stylus is read raw.** Pressure and tilt taper the line, the pen's side
+button erases for exactly one stroke without changing tools, and a palm on the
+glass is ignored instead of leaving a smear.
 
-When it moves the way you want it, export it: MP4, GIF, a PNG sequence, or the
-current drawing as a still.
+The rest is what you would want anyway: layers inside each drawing with merge
+down, onion skin one neighbour at a time, line/rect/ellipse/circle shapes, move
+and rotate, an eyedropper that samples the layer you picked rather than the
+flattened image, and export to MP4, GIF, a PNG sequence or a single still.
+Projects autosave as compact documents and can be zipped with every reference
+inside.
 
-The whole download is under 9 MB. Your work lives in the app's own folder and
-goes nowhere else. If something is missing or wrong, open an issue on GitHub and
-it can actually be fixed.
-
-Requires Android 8.0 or newer.
+8.7 MB. Android 8.0 or newer. No account to create, no network to be offline
+from.
 ```
 
 ## Category and tags

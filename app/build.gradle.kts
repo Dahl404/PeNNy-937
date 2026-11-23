@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
+}
+
+// Upload-key credentials live in keystore.properties (gitignored), pointing at a
+// keystore kept outside the repository. Play App Signing holds the real app key.
+val keystoreProps = Properties().apply {
+  val f = rootProject.file("keystore.properties")
+  if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -12,12 +21,25 @@ android {
     targetSdk = 37
     versionCode = 10
     versionName = "1.7"
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  signingConfigs {
+    create("release") {
+      storeFile = file(keystoreProps.getProperty("storeFile"))
+      storePassword = keystoreProps.getProperty("storePassword")
+      keyAlias = keystoreProps.getProperty("keyAlias")
+      keyPassword = keystoreProps.getProperty("keyPassword")
+      enableV1Signing = false
+      enableV2Signing = true
+    }
   }
 
   buildTypes {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.getByName("release")
     }
   }
   compileOptions {
@@ -67,4 +89,9 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.robolectric)
+
+  androidTestImplementation(libs.junit)
+  androidTestImplementation(libs.androidx.test.core)
+  androidTestImplementation(libs.androidx.test.ext.junit)
+  androidTestImplementation(libs.androidx.test.runner)
 }

@@ -1,10 +1,9 @@
 package com.masen.penny937.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -39,17 +38,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.Image
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -57,13 +59,23 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import com.masen.penny937.model.Frame
+import com.masen.penny937.model.Project
+import com.masen.penny937.paint.FrameRasterizer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import kotlin.math.abs
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +86,7 @@ import com.masen.penny937.ui.icons.PennyIcons
 import com.masen.penny937.ui.theme.LocalPenny
 import com.masen.penny937.ui.theme.LocalPennyType
 import com.masen.penny937.ui.theme.PennyDimens
+import com.masen.penny937.ui.theme.PennyMotion
 
 @Composable
 fun Hairline(modifier: Modifier = Modifier, color: Color = LocalPenny.current.hairline) {
@@ -116,8 +129,8 @@ fun PennyIconButton(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed && enabled) 0.9f else 1f,
-        animationSpec = spring(dampingRatio = 0.55f, stiffness = 900f),
+        targetValue = if (pressed && enabled) 0.92f else 1f,
+        animationSpec = PennyMotion.pressFloat(),
         label = "iconPress"
     )
     Box(
@@ -161,12 +174,28 @@ fun PrimaryButton(
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val shape = RoundedCornerShape(16.dp)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) 0.975f else 1f,
+        animationSpec = PennyMotion.pressFloat(),
+        label = "primaryPress"
+    )
     Row(
         modifier = modifier
             .height(50.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(shape)
             .background(if (enabled) palette.accent else palette.surfaceSunken)
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = ripple(color = Color.White.copy(alpha = 0.18f)),
+                enabled = enabled,
+                onClick = onClick
+            )
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -194,13 +223,29 @@ fun SecondaryButton(
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val shape = RoundedCornerShape(14.dp)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) 0.985f else 1f,
+        animationSpec = PennyMotion.pressFloat(),
+        label = "secondaryPress"
+    )
     Row(
         modifier = modifier
             .height(44.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(shape)
             .background(palette.surface)
             .border(PennyDimens.hairline, palette.hairline, shape)
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = ripple(color = palette.textPrimary.copy(alpha = 0.08f)),
+                enabled = enabled,
+                onClick = onClick
+            )
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp)
@@ -400,17 +445,33 @@ fun SegmentedControl(
         options.forEachIndexed { index, option ->
             val selected = index == selectedIndex
             val shape = RoundedCornerShape(9.dp)
+            val background by animateColorAsState(
+                targetValue = if (selected) palette.surface else Color.Transparent,
+                animationSpec = PennyMotion.color(),
+                label = "segmentBackground"
+            )
+            val textColor by animateColorAsState(
+                targetValue = if (selected) palette.textPrimary else palette.textSecondary,
+                animationSpec = PennyMotion.color(),
+                label = "segmentText"
+            )
+            val elevation by animateDpAsState(
+                targetValue = if (selected) 3.dp else 0.dp,
+                animationSpec = PennyMotion.settleDp(),
+                label = "segmentElevation"
+            )
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .then(
-                        if (selected) Modifier
-                            .shadow(3.dp, shape, clip = false, ambientColor = palette.shadow, spotColor = palette.shadow)
-                            .clip(shape)
-                            .background(palette.surface)
-                        else Modifier
+                    .shadow(
+                        elevation,
+                        shape,
+                        clip = false,
+                        ambientColor = palette.shadow,
+                        spotColor = palette.shadow
                     )
                     .clip(shape)
+                    .background(background)
                     .clickable { onSelect(index) }
                     .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center
@@ -420,7 +481,7 @@ fun SegmentedControl(
                     style = type.label.copy(
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                     ),
-                    color = if (selected) palette.textPrimary else palette.textSecondary,
+                    color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -447,7 +508,9 @@ fun PennyTextField(
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
     textStyle: TextStyle? = null,
-    textAlign: TextAlign = TextAlign.Start
+    textAlign: TextAlign = TextAlign.Start,
+    imeAction: ImeAction = ImeAction.Default,
+    onImeAction: (() -> Unit)? = null
 ) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
@@ -462,7 +525,11 @@ fun PennyTextField(
         textStyle = resolvedStyle.copy(color = palette.textPrimary, textAlign = textAlign),
         cursorBrush = SolidColor(palette.accent),
         singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+        keyboardActions = KeyboardActions(
+            onDone = { onImeAction?.invoke() },
+            onGo = { onImeAction?.invoke() }
+        ),
         decorationBox = { inner ->
             Box {
                 if (value.isEmpty()) {
@@ -489,12 +556,27 @@ fun ColorCircle(
 ) {
     val palette = LocalPenny.current
     val shape = CircleShape
+    val borderWidth by animateDpAsState(
+        targetValue = if (selected) 2.dp else 1.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "colorRingWidth"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) palette.accent else palette.hairlineStrong,
+        animationSpec = PennyMotion.color(),
+        label = "colorRing"
+    )
+    val inset by animateDpAsState(
+        targetValue = if (selected) 3.dp else 0.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "colorRingInset"
+    )
+    // Animated Dp values can undershoot while a target changes mid-flight. Padding
+    // and border widths reject negatives, so clamp here as a final guard.
     val modifier = Modifier
         .size(size)
-        .then(
-            if (selected) Modifier.border(2.dp, palette.accent, shape).padding(3.dp)
-            else Modifier.border(1.dp, palette.hairlineStrong, shape)
-        )
+        .border(borderWidth.coerceAtLeast(0.dp), borderColor, shape)
+        .padding(inset.coerceAtLeast(0.dp))
         .clip(shape)
         .background(color)
         .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
@@ -517,8 +599,8 @@ fun BoxScope.PennySheet(
     AnimatedVisibility(
         visible = visible,
         modifier = Modifier.matchParentSize(),
-        enter = fadeIn(tween(200)),
-        exit = fadeOut(tween(200))
+        enter = fadeIn(PennyMotion.fadeInFloat()),
+        exit = fadeOut(PennyMotion.fadeOutFloat())
     ) {
         Box(
             Modifier
@@ -533,10 +615,10 @@ fun BoxScope.PennySheet(
     AnimatedVisibility(
         visible = visible,
         modifier = Modifier.align(Alignment.BottomCenter),
-        enter = slideInVertically(tween(340, easing = FastOutSlowInEasing)) { it } +
-            fadeIn(tween(150)),
-        exit = slideOutVertically(tween(230, easing = FastOutSlowInEasing)) { it } +
-            fadeOut(tween(150))
+        enter = slideInVertically(PennyMotion.sheetInOffset()) { it } +
+            fadeIn(PennyMotion.fadeInFloat()),
+        exit = slideOutVertically(PennyMotion.sheetOutOffset()) { it } +
+            fadeOut(PennyMotion.fadeOutFloat())
     ) {
         val shape = RoundedCornerShape(
             topStart = PennyDimens.sheetRadius,
@@ -590,6 +672,51 @@ fun BoxScope.PennySheet(
             }
             content()
         }
+    }
+}
+
+/** A small rasterised preview of one frame, for sheets and pickers. */
+@Composable
+fun FramePreview(
+    project: Project,
+    frame: Frame,
+    modifier: Modifier = Modifier,
+    widthPx: Int = 104
+) {
+    val revision = frame.revision
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        frame.id,
+        revision,
+        project.width,
+        project.height,
+        project.background,
+        widthPx
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val width = widthPx.coerceAtLeast(16)
+            val height = (width.toFloat() * project.height / project.width)
+                .roundToInt()
+                .coerceAtLeast(1)
+            FrameRasterizer.rasterize(
+                project = project,
+                frame = frame,
+                targetWidth = width,
+                targetHeight = height,
+                background = project.background
+            ).asImageBitmap()
+        }
+    }
+    val image = bitmap
+    if (image != null) {
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            modifier = modifier,
+            contentScale = ContentScale.Fit
+        )
+    } else {
+        Box(modifier)
     }
 }
 
@@ -665,17 +792,22 @@ fun PennyToggle(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalPenny.current
-    val offset by androidx.compose.animation.core.animateDpAsState(
+    val offset by animateDpAsState(
         targetValue = if (checked) 20.dp else 2.dp,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 700f),
+        animationSpec = PennyMotion.gentleDp(),
         label = "toggle"
+    )
+    val trackColor by animateColorAsState(
+        targetValue = if (checked) palette.accent else palette.surfaceSunken,
+        animationSpec = PennyMotion.color(),
+        label = "toggleTrack"
     )
     Box(
         modifier = modifier
             .width(44.dp)
             .height(26.dp)
             .clip(CircleShape)
-            .background(if (checked) palette.accent else palette.surfaceSunken)
+            .background(trackColor)
             .clickable { onCheckedChange(!checked) }
     ) {
         Box(
@@ -725,22 +857,38 @@ fun ChoiceChip(
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val shape = RoundedCornerShape(9.dp)
+    val background by animateColorAsState(
+        targetValue = if (selected) palette.accentSoft else palette.surfaceSunken,
+        animationSpec = PennyMotion.color(),
+        label = "chipBackground"
+    )
+    val borderWidth by animateDpAsState(
+        targetValue = if (selected) 1.dp else 0.6.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "chipBorderWidth"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) palette.accent.copy(alpha = 0.5f) else palette.hairline,
+        animationSpec = PennyMotion.color(),
+        label = "chipBorder"
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (selected) palette.accent else palette.textSecondary,
+        animationSpec = PennyMotion.color(),
+        label = "chipText"
+    )
     Box(
         modifier = modifier
             .clip(shape)
-            .background(if (selected) palette.accentSoft else palette.surfaceSunken)
-            .border(
-                if (selected) 1.dp else 0.6.dp,
-                if (selected) palette.accent.copy(alpha = 0.5f) else palette.hairline,
-                shape
-            )
+            .background(background)
+            .border(borderWidth, borderColor, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp)
     ) {
         Text(
             label,
             style = type.caption.copy(fontWeight = FontWeight.SemiBold),
-            color = if (selected) palette.accent else palette.textSecondary,
+            color = textColor,
             maxLines = 1
         )
     }

@@ -1,16 +1,25 @@
 package com.masen.penny937.ui.editor
 
 import android.graphics.Color as AColor
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,14 +27,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -35,22 +50,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.editor.ExportState
 import com.masen.penny937.export.ExportFormat
 import com.masen.penny937.export.VideoPlan
+import com.masen.penny937.model.Frame
 import com.masen.penny937.model.GridStyle
+import com.masen.penny937.model.Layer
 import com.masen.penny937.model.ProjectFactory
 import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Stroke
@@ -58,8 +82,10 @@ import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.Ink
 import com.masen.penny937.paint.Shapes
 import com.masen.penny937.ui.SharedFiles
+import com.masen.penny937.ui.components.BipolarSlider
 import com.masen.penny937.ui.components.ChoiceChip
 import com.masen.penny937.ui.components.ColorCircle
+import com.masen.penny937.ui.components.FramePreview
 import com.masen.penny937.ui.components.Hairline
 import com.masen.penny937.ui.components.PennyIconButton
 import com.masen.penny937.ui.components.PennySheet
@@ -77,7 +103,12 @@ import com.masen.penny937.ui.icons.PennyIcons
 import com.masen.penny937.ui.icons.shapeIcon
 import com.masen.penny937.ui.theme.LocalPenny
 import com.masen.penny937.ui.theme.LocalPennyType
+import com.masen.penny937.ui.theme.PennyDimens
+import com.masen.penny937.ui.theme.PennyMotion
 import androidx.compose.ui.platform.LocalContext
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -94,11 +125,10 @@ private val InkSwatches = listOf(
     0xFF007AFF,
     0xFF5856D6,
     0xFFAF52DE,
-    0xFFFF2D55,
-    0xFF8B5A2B
+    0xFFFF2D55
 ).map { it.toInt() }
 
-private val Rainbow = listOf(
+private val HueWheelColors = listOf(
     Color(0xFFFF3B30),
     Color(0xFFFFCC00),
     Color(0xFF34C759),
@@ -118,7 +148,7 @@ fun BoxScope.ColorSheet(
     visible: Boolean,
     editor: EditorModel,
     onDismiss: () -> Unit,
-    onPickFromLayer: () -> Unit
+    onPickFromLayer: (Long) -> Unit
 ) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
@@ -126,26 +156,65 @@ fun BoxScope.ColorSheet(
     var hue by remember { mutableFloatStateOf(initial[0]) }
     var sat by remember { mutableFloatStateOf(initial[1]) }
     var value by remember { mutableFloatStateOf(initial[2]) }
+    var sampleLayerId by remember { mutableStateOf<Long?>(null) }
+    var sampleMenuOpen by remember { mutableStateOf(false) }
+    var editingSwatch by remember { mutableStateOf<Int?>(null) }
+    val layers = editor.frame.layers
+    val sampleLayer = sampleLayerId
+        ?.let { id -> layers.firstOrNull { it.id == id } }
+        ?: editor.layer
     androidx.compose.runtime.LaunchedEffect(visible) {
         if (visible) {
+            sampleMenuOpen = false
+            editingSwatch = null
             AColor.colorToHSV(editor.color, initial)
             hue = initial[0]
             sat = initial[1]
             value = initial[2]
+        } else {
+            sampleMenuOpen = false
+            editingSwatch = null
         }
     }
 
     fun commit() {
-        editor.chooseColor(hsvColor(hue, sat, value))
+        val next = hsvColor(hue, sat, value)
+        editor.chooseColor(next)
+        editingSwatch?.let { editor.setCustomSwatch(it, next) }
     }
 
-    fun select(color: Int) {
+    fun applyColor(color: Int) {
         val hsv = FloatArray(3)
         AColor.colorToHSV(color, hsv)
         hue = hsv[0]
         sat = hsv[1]
         value = hsv[2]
         editor.chooseColor(color)
+    }
+
+    fun select(color: Int) {
+        applyColor(color)
+        editingSwatch = null
+    }
+
+    fun tapCustomSwatch(index: Int) {
+        val saved = editor.customSwatches.getOrNull(index)
+        if (saved == null) {
+            editor.setCustomSwatch(index, editor.color)
+            editingSwatch = null
+        } else {
+            applyColor(saved)
+            editingSwatch = null
+        }
+    }
+
+    fun editCustomSwatch(index: Int) {
+        val saved = editor.customSwatches.getOrNull(index) ?: editor.color
+        if (editor.customSwatches.getOrNull(index) == null) {
+            editor.setCustomSwatch(index, saved)
+        }
+        editingSwatch = index
+        applyColor(saved)
     }
 
     PennySheet(
@@ -178,30 +247,113 @@ fun BoxScope.ColorSheet(
             }
 
             Spacer(Modifier.height(14.dp))
-            SecondaryButton(
-                text = "Pick from ${editor.layer.name}",
-                icon = PennyIcons.Eyedropper,
-                onClick = onPickFromLayer,
-                modifier = Modifier.fillMaxWidth()
-            )
+            SectionLabel("COLOR PICKER")
             Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.weight(1f)) {
+                    val pickerShape = RoundedCornerShape(14.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(pickerShape)
+                            .background(palette.surface)
+                            .border(PennyDimens.hairline, palette.hairline, pickerShape)
+                            .clickable { sampleMenuOpen = true }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            PennyIcons.Eyedropper,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp),
+                            tint = palette.accent
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "SAMPLE FROM",
+                                style = type.caption,
+                                color = palette.textTertiary
+                            )
+                            Text(
+                                sampleLayer.name,
+                                style = type.label,
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            PennyIcons.ChevronDown,
+                            contentDescription = "Choose a layer to sample",
+                            modifier = Modifier.size(16.dp),
+                            tint = palette.textSecondary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = sampleMenuOpen,
+                        onDismissRequest = { sampleMenuOpen = false }
+                    ) {
+                        for (layer in layers.reversed()) {
+                            val isSource = layer.id == sampleLayer.id
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            layer.name,
+                                            style = type.bodyStrong,
+                                            color = if (isSource) palette.accent else palette.textPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            layerDescriptor(editor, layer),
+                                            style = type.caption,
+                                            color = palette.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                },
+                                trailingIcon = if (isSource) {
+                                    {
+                                        Icon(
+                                            PennyIcons.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = palette.accent
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    sampleLayerId = layer.id
+                                    sampleMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+                }
+                SecondaryButton(
+                    text = "Pick",
+                    icon = PennyIcons.Eyedropper,
+                    onClick = { onPickFromLayer(sampleLayer.id) },
+                    modifier = Modifier.width(96.dp)
+                )
+            }
+            Spacer(Modifier.height(7.dp))
             Text(
-                "Samples only the selected layer — match ink you already drew, " +
-                    "or a reference image.",
+                "Samples only ${sampleLayer.name}; you keep drawing on ${editor.layer.name}.",
                 style = type.caption,
                 color = palette.textTertiary,
                 lineHeight = 16.sp
             )
 
             Spacer(Modifier.height(18.dp))
-            SliderBlock(label = "Hue", valueText = "${hue.roundToInt()}°") {
-                PennySlider(
-                    value = hue,
-                    onValueChange = { hue = it; commit() },
-                    valueRange = 0f..360f,
-                    trackColors = Rainbow
-                )
-            }
             SliderBlock(
                 label = "Saturation",
                 valueText = "${(sat * 100).roundToInt()}%"
@@ -230,23 +382,224 @@ fun BoxScope.ColorSheet(
             Spacer(Modifier.height(14.dp))
             SectionLabel("SWATCHES")
             Spacer(Modifier.height(10.dp))
-            val rows = InkSwatches.chunked(7)
-            for ((rowIndex, row) in rows.withIndex()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    for (color in row) {
-                        ColorCircle(
-                            color = Color(color),
-                            size = 30.dp,
-                            selected = editor.color == color,
-                            onClick = { select(color) }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columnGap = 14.dp
+                // Keep the swatch grid at least six readable columns wide; the wheel
+                // takes what is left, capped at roughly twice its old 108.dp size.
+                val wheelSize = (maxWidth - 186.dp - columnGap).coerceIn(80.dp, 216.dp)
+                val swatchArea = maxWidth - wheelSize - columnGap
+                val swatchSize = ((swatchArea - 15.dp) / 6f).coerceIn(22.dp, 36.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(columnGap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(18.dp)
+                    ) {
+                        repeat(3) { rowIndex ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (column in 0 until 4) {
+                                    val color = InkSwatches[column * 3 + rowIndex]
+                                    ColorCircle(
+                                        color = Color(color),
+                                        size = swatchSize,
+                                        selected = editor.color == color,
+                                        onClick = { select(color) }
+                                    )
+                                }
+                                for (customColumn in 0 until 2) {
+                                    val index = customColumn * 3 + rowIndex
+                                    CustomSwatchSlot(
+                                        color = editor.customSwatches.getOrNull(index),
+                                        size = swatchSize,
+                                        selected = editingSwatch == index,
+                                        onClick = { tapCustomSwatch(index) },
+                                        onLongClick = { editCustomSwatch(index) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.width(wheelSize),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "HUE · ${hue.roundToInt()}°",
+                            style = type.caption,
+                            color = palette.textTertiary
+                        )
+                        Spacer(Modifier.height(5.dp))
+                        HueWheel(
+                            hue = hue,
+                            color = Color(hsvColor(hue, sat, value)),
+                            onHueChange = { hue = it; commit() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
                         )
                     }
                 }
-                if (rowIndex != rows.lastIndex) Spacer(Modifier.height(12.dp))
             }
             Spacer(Modifier.height(8.dp))
+            Text(
+                if (editingSwatch != null) {
+                    "Editing a custom swatch — the wheel and sliders now set it."
+                } else {
+                    "Tap a custom slot to save the current ink; hold it to edit with the wheel."
+                },
+                style = type.caption,
+                color = if (editingSwatch != null) palette.accent else palette.textTertiary,
+                lineHeight = 16.sp
+            )
         }
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CustomSwatchSlot(
+    color: Int?,
+    size: Dp,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val shape = CircleShape
+    val ringWidth by animateDpAsState(
+        targetValue = if (selected) 2.dp else 1.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "customSwatchRing"
+    )
+    val ringColor by animateColorAsState(
+        targetValue = if (selected) palette.accent else palette.hairlineStrong,
+        animationSpec = PennyMotion.color(),
+        label = "customSwatchRingColor"
+    )
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(shape)
+            .background(if (color == null) palette.surfaceSunken else Color(color))
+            .border(ringWidth, ringColor, shape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (color == null) {
+            Icon(
+                PennyIcons.Plus,
+                contentDescription = "Empty custom color",
+                modifier = Modifier.size(11.dp),
+                tint = palette.textTertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun HueWheel(
+    hue: Float,
+    color: Color,
+    onHueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalPenny.current
+    Canvas(
+        modifier = modifier
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    fun update(position: Offset) {
+                        val dx = position.x - cx
+                        val dy = position.y - cy
+                        if (dx * dx + dy * dy < 1f) return
+                        val angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
+                        onHueChange(if (angle < 0f) angle + 360f else angle)
+                    }
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    update(down.position)
+                    down.consume()
+                    var event = awaitPointerEvent()
+                    while (event.changes.any { it.pressed }) {
+                        update(event.changes.first().position)
+                        event.changes.forEach { it.consume() }
+                        event = awaitPointerEvent()
+                    }
+                }
+            }
+    ) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val center = Offset(cx, cy)
+        val wheelSize = min(size.width, size.height)
+        val ringWidth = (wheelSize * 0.16f).coerceAtLeast(12.dp.toPx())
+        val radius = wheelSize / 2f - ringWidth / 2f - 1.dp.toPx()
+
+        drawCircle(
+            brush = Brush.sweepGradient(HueWheelColors),
+            radius = radius,
+            center = center,
+            style = DrawStroke(width = ringWidth)
+        )
+        drawCircle(
+            color = palette.hairlineStrong,
+            radius = radius + ringWidth / 2f,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+        drawCircle(
+            color = palette.hairlineStrong,
+            radius = radius - ringWidth / 2f,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+
+        val innerRadius = radius - ringWidth / 2f - 2.dp.toPx()
+        drawCircle(color = color, radius = innerRadius, center = center)
+        drawCircle(
+            color = palette.hairline,
+            radius = innerRadius,
+            center = center,
+            style = DrawStroke(width = 0.8.dp.toPx())
+        )
+
+        val angle = Math.toRadians(hue.toDouble()).toFloat()
+        val thumb = Offset(cx + cos(angle) * radius, cy + sin(angle) * radius)
+        drawCircle(
+            color = palette.shadow,
+            radius = ringWidth * 0.66f,
+            center = Offset(thumb.x, thumb.y + 1.dp.toPx())
+        )
+        drawCircle(color = Color.White, radius = ringWidth * 0.62f, center = thumb)
+        drawCircle(
+            color = Color(hsvColor(hue, 1f, 1f)),
+            radius = ringWidth * 0.38f,
+            center = thumb
+        )
+    }
+}
+
+private fun layerDescriptor(editor: EditorModel, layer: Layer): String {
+    val parts = buildList {
+        if (layer.id == editor.layer.id) add("Active layer")
+        if (layer.isReference) add("Reference")
+        if (!layer.visible) add("Hidden")
+        if (isEmpty()) {
+            add(
+                if (layer.strokes.size == 1) "1 stroke"
+                else "${layer.strokes.size} strokes"
+            )
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable
@@ -278,6 +631,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
     val maxWidth = tool.maxWidth()
     val quickSizes = when (tool) {
         Tool.PEN, Tool.PENCIL, Tool.SHAPE -> listOf(2f, 4f, 8f, 16f, 32f)
+        Tool.MORPH -> listOf(24f, 48f, 72f, 120f, 200f)
         else -> listOf(16f, 32f, 64f, 120f)
     }
     val previewColor = if (tool == Tool.ERASER) 0xFF8E8E93.toInt() else editor.color
@@ -333,6 +687,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
             Tool.MARKER -> "Broad translucent colour"
             Tool.SHAPE -> "Drag to place a vector outline"
             Tool.ERASER -> "Removes ink from the active layer"
+            Tool.MORPH -> "Pulls the ink under the brush"
         },
         leading = {
             Box(
@@ -349,6 +704,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                         Tool.MARKER -> PennyIcons.Marker
                         Tool.SHAPE -> shapeIcon(editor.shapeKind)
                         Tool.ERASER -> PennyIcons.Eraser
+                        Tool.MORPH -> PennyIcons.Morph
                     },
                     contentDescription = null,
                     tint = palette.accent,
@@ -376,9 +732,14 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            PreviewBox(projectBackground = editor.project.background, stroke = previewStroke)
-            Spacer(Modifier.height(16.dp))
-            SliderBlock(label = "Size", valueText = "${editor.size.roundToInt()} px") {
+            if (tool != Tool.MORPH) {
+                PreviewBox(projectBackground = editor.project.background, stroke = previewStroke)
+                Spacer(Modifier.height(16.dp))
+            }
+            SliderBlock(
+                label = if (tool == Tool.MORPH) "Area" else "Size",
+                valueText = "${editor.size.roundToInt()} px"
+            ) {
                 PennySlider(
                     value = editor.size,
                     onValueChange = { editor.changeSize(it) },
@@ -394,7 +755,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                     )
                 }
             }
-            if (tool != Tool.SHAPE) {
+            if (tool != Tool.SHAPE && tool != Tool.MORPH) {
                 Spacer(Modifier.height(16.dp))
                 Hairline()
                 Spacer(Modifier.height(14.dp))
@@ -428,6 +789,7 @@ fun BoxScope.BrushSheet(visible: Boolean, editor: EditorModel, onDismiss: () -> 
                     Tool.MARKER -> "Marker ink is composited once per stroke, so overlaps never turn darker at the seams."
                     Tool.SHAPE -> "Drag from corner to corner. Square and circle keep their aspect; release to commit the outline. Shapes are vectors, so undo and export treat them like any stroke."
                     Tool.ERASER -> "The eraser only touches the active layer. Hide a layer to protect it."
+                    Tool.MORPH -> "Drag to pull the ink under the brush. Each drag is one undoable step; two fingers pan and zoom."
                 },
                 style = type.caption,
                 color = palette.textTertiary,
@@ -531,9 +893,11 @@ fun BoxScope.LayersSheet(
     val layerCount = frame.layers.size
     val indices = remember(frame.layers.size) { frame.layers.indices.reversed().toList() }
     val selectedLayer = editor.layer
-    val canMerge = editor.currentLayer > 0 &&
-        !selectedLayer.locked && !selectedLayer.isReference &&
-        frame.layers[editor.currentLayer - 1].let { !it.locked && !it.isReference }
+    val canMerge = com.masen.penny937.model.ProjectOps.canMergeLayerDown(
+        frame, editor.currentLayer
+    )
+    var renamingId by remember { mutableStateOf<Long?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     PennySheet(
         visible = visible,
@@ -566,6 +930,13 @@ fun BoxScope.LayersSheet(
                 tint = palette.accent
             )
             Spacer(Modifier.height(8.dp))
+            ToggleRow(
+                title = "References in the export",
+                subtitle = "New imports are drawn into the final video",
+                checked = editor.referenceInOutput,
+                onCheckedChange = { editor.setReferenceOutputDefault(it) }
+            )
+            Spacer(Modifier.height(8.dp))
             SecondaryButton(
                 text = "Import reference image",
                 onClick = onImportReference,
@@ -583,7 +954,7 @@ fun BoxScope.LayersSheet(
             )
             Spacer(Modifier.height(5.dp))
             Text(
-                "References are locked guides and are not exported or played. " +
+                "References stay locked guides unless you turn on export above. " +
                     "Video clips are sampled at ${editor.project.fps} fps and fill frames from the current frame to the end of the clip.",
                 style = type.caption,
                 color = palette.textTertiary,
@@ -601,16 +972,27 @@ fun BoxScope.LayersSheet(
                     val layer = frame.layers[index]
                     val selected = index == editor.currentLayer
                     val shape = RoundedCornerShape(12.dp)
+                    val rowBackground by animateColorAsState(
+                        targetValue = if (selected) palette.accentSoft else palette.surfaceSunken,
+                        animationSpec = PennyMotion.color(),
+                        label = "layerRowBackground"
+                    )
+                    val rowBorderWidth by animateDpAsState(
+                        targetValue = if (selected) 1.dp else 0.5.dp,
+                        animationSpec = PennyMotion.settleDp(),
+                        label = "layerRowBorderWidth"
+                    )
+                    val rowBorderColor by animateColorAsState(
+                        targetValue = if (selected) palette.accent.copy(alpha = 0.45f) else palette.hairline,
+                        animationSpec = PennyMotion.color(),
+                        label = "layerRowBorder"
+                    )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(shape)
-                            .background(if (selected) palette.accentSoft else palette.surfaceSunken)
-                            .border(
-                                if (selected) 1.dp else 0.5.dp,
-                                if (selected) palette.accent.copy(alpha = 0.45f) else palette.hairline,
-                                shape
-                            )
+                            .background(rowBackground)
+                            .border(rowBorderWidth, rowBorderColor, shape)
                             .clickable { editor.selectLayer(index) }
                             .padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -622,52 +1004,112 @@ fun BoxScope.LayersSheet(
                             iconSize = 16.dp,
                             tint = if (layer.visible) palette.textSecondary else palette.textTertiary
                         )
-                        Column(Modifier.weight(1f).padding(horizontal = 3.dp)) {
-                            Text(
-                                layer.name,
-                                style = type.label.copy(
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-                                ),
-                                color = palette.textPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                        if (renamingId == layer.id) {
+                            val renameFocus = remember(layer.id) { FocusRequester() }
+                            LaunchedEffect(layer.id) { renameFocus.requestFocus() }
+                            val commitRename = {
+                                val trimmed = renameText.trim()
+                                if (trimmed.isEmpty()) {
+                                    editor.showHint("Give the layer a name")
+                                } else {
+                                    editor.renameLayer(index, trimmed)
+                                    renamingId = null
+                                }
+                            }
+                            PennyTextField(
+                                value = renameText,
+                                onValueChange = { renameText = it.take(40) },
+                                placeholder = "Layer name",
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 3.dp)
+                                    .focusRequester(renameFocus),
+                                textStyle = type.label,
+                                imeAction = ImeAction.Done,
+                                onImeAction = commitRename
                             )
-                            Text(
-                                buildString {
-                                    if (layer.isReference) append("Reference image")
-                                    else append("${layer.strokes.size} strokes")
-                                    append(" · ${(layer.opacity * 100).roundToInt()}%")
-                                    if (layer.locked) append(" · locked")
+                            PennyIconButton(
+                                icon = PennyIcons.Check,
+                                onClick = commitRename,
+                                size = 28.dp,
+                                iconSize = 15.dp,
+                                tint = palette.accent,
+                                contentDescription = "Save layer name"
+                            )
+                            PennyIconButton(
+                                icon = PennyIcons.Close,
+                                onClick = { renamingId = null },
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                tint = palette.textSecondary,
+                                contentDescription = "Cancel renaming"
+                            )
+                        } else {
+                            Column(Modifier.weight(1f).padding(horizontal = 3.dp)) {
+                                Text(
+                                    layer.name,
+                                    style = type.label.copy(
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                                    ),
+                                    color = palette.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    buildString {
+                                        if (layer.isReference) {
+                                            append(if (layer.image?.inOutput == true) "Reference · in export"
+                                            else "Reference · guide only")
+                                        } else if (layer.flattened) {
+                                            append("Merged image")
+                                        } else {
+                                            append("${layer.strokes.size} strokes")
+                                        }
+                                        append(" · ${(layer.opacity * 100).roundToInt()}%")
+                                        if (layer.locked) append(" · locked")
+                                    },
+                                    style = type.caption,
+                                    color = palette.textTertiary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            PennyIconButton(
+                                icon = PennyIcons.Pencil,
+                                onClick = {
+                                    editor.selectLayer(index)
+                                    renamingId = layer.id
+                                    renameText = layer.name
                                 },
-                                style = type.caption,
-                                color = palette.textTertiary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                tint = palette.textTertiary,
+                                contentDescription = "Rename ${layer.name}"
+                            )
+                            PennyIconButton(
+                                icon = if (layer.locked) PennyIcons.Lock else PennyIcons.LockOpen,
+                                onClick = { editor.setLayerLocked(index, !layer.locked) },
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                tint = if (layer.locked) palette.accent else palette.textTertiary
+                            )
+                            PennyIconButton(
+                                icon = PennyIcons.ArrowUp,
+                                onClick = { editor.selectLayer(index); editor.moveLayerUp() },
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                enabled = index < layerCount - 1,
+                                tint = palette.textSecondary
+                            )
+                            PennyIconButton(
+                                icon = PennyIcons.ArrowDown,
+                                onClick = { editor.selectLayer(index); editor.moveLayerDown() },
+                                size = 28.dp,
+                                iconSize = 14.dp,
+                                enabled = index > 0,
+                                tint = palette.textSecondary
                             )
                         }
-                        PennyIconButton(
-                            icon = if (layer.locked) PennyIcons.Lock else PennyIcons.LockOpen,
-                            onClick = { editor.setLayerLocked(index, !layer.locked) },
-                            size = 28.dp,
-                            iconSize = 14.dp,
-                            tint = if (layer.locked) palette.accent else palette.textTertiary
-                        )
-                        PennyIconButton(
-                            icon = PennyIcons.ArrowUp,
-                            onClick = { editor.selectLayer(index); editor.moveLayerUp() },
-                            size = 28.dp,
-                            iconSize = 14.dp,
-                            enabled = index < layerCount - 1,
-                            tint = palette.textSecondary
-                        )
-                        PennyIconButton(
-                            icon = PennyIcons.ArrowDown,
-                            onClick = { editor.selectLayer(index); editor.moveLayerDown() },
-                            size = 28.dp,
-                            iconSize = 14.dp,
-                            enabled = index > 0,
-                            tint = palette.textSecondary
-                        )
                     }
                 }
             }
@@ -688,23 +1130,32 @@ fun BoxScope.LayersSheet(
             )
             Spacer(Modifier.height(10.dp))
             SecondaryButton(
-                text = "Shift layer",
+                text = "Move / rotate layer",
                 onClick = onShiftLayer,
                 modifier = Modifier.fillMaxWidth(),
-                icon = PennyIcons.Move,
+                icon = PennyIcons.Rotate,
                 tint = palette.accent,
                 enabled = !selectedLayer.locked
             )
             if (selectedLayer.locked && !selectedLayer.isReference) {
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "Unlock the layer to shift its contents.",
+                    "Unlock the layer to move its contents.",
                     style = type.caption,
                     color = palette.textTertiary,
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
             if (selectedLayer.isReference) {
+                Spacer(Modifier.height(10.dp))
+                ToggleRow(
+                    title = "Show in export",
+                    subtitle = "Draw this reference into the final video",
+                    checked = selectedLayer.image?.inOutput == true,
+                    onCheckedChange = {
+                        editor.setReferenceLayerInOutput(editor.currentLayer, it)
+                    }
+                )
                 Spacer(Modifier.height(10.dp))
                 SecondaryButton(
                     text = "Position reference",
@@ -912,11 +1363,28 @@ fun BoxScope.FrameSheet(
     val palette = LocalPenny.current
     val type = LocalPennyType.current
     val frame = editor.frame
+    val frames = editor.project.frames
+    val listState = rememberLazyListState()
+    var lastShownFrame by remember { mutableIntStateOf(-1) }
+    LaunchedEffect(visible, editor.currentFrame) {
+        if (!visible) {
+            lastShownFrame = -1
+            return@LaunchedEffect
+        }
+        // Jump into place on open; animate only when the selection changes
+        // while the sheet is already visible, so the entrance stays clean.
+        if (lastShownFrame < 0) {
+            listState.scrollToItem(editor.currentFrame)
+        } else if (lastShownFrame != editor.currentFrame) {
+            listState.animateScrollToItem(editor.currentFrame)
+        }
+        lastShownFrame = editor.currentFrame
+    }
     PennySheet(
         visible = visible,
         onDismiss = onDismiss,
-        title = "Frame ${editor.currentFrame + 1}",
-        subtitle = "of ${editor.project.frames.size} · ${editor.project.fps} fps",
+        title = "Frames",
+        subtitle = "${frames.size} frames · ${editor.project.fps} fps · frame ${editor.currentFrame + 1}",
         leading = {
             Box(
                 Modifier
@@ -934,7 +1402,44 @@ fun BoxScope.FrameSheet(
             }
         }
     ) {
-        Column {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            LazyRow(
+                state = listState,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                itemsIndexed(frames, key = { _, item -> item.id }) { index, item ->
+                    FrameStripItem(
+                        project = editor.project,
+                        frame = item,
+                        index = index,
+                        selected = index == editor.currentFrame,
+                        onClick = { editor.selectFrame(index) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SecondaryButton(
+                    text = "Move left",
+                    onClick = { editor.moveFrame(editor.currentFrame, editor.currentFrame - 1) },
+                    modifier = Modifier.weight(1f),
+                    icon = PennyIcons.ChevronLeft,
+                    enabled = editor.currentFrame > 0
+                )
+                SecondaryButton(
+                    text = "Move right",
+                    onClick = { editor.moveFrame(editor.currentFrame, editor.currentFrame + 1) },
+                    modifier = Modifier.weight(1f),
+                    icon = PennyIcons.ChevronRight,
+                    enabled = editor.currentFrame < frames.lastIndex
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            OnionSliderRow(editor)
+            Spacer(Modifier.height(14.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Hold", style = type.bodyStrong, color = palette.textPrimary)
@@ -951,16 +1456,14 @@ fun BoxScope.FrameSheet(
                 )
             }
             Spacer(Modifier.height(14.dp))
-            Hairline()
-            Spacer(Modifier.height(14.dp))
             SecondaryButton(
-                text = "Duplicate frame",
+                text = "Empty frame",
                 onClick = {
-                    editor.duplicateFrame()
+                    editor.emptyFrame()
                     onDismiss()
                 },
                 modifier = Modifier.fillMaxWidth(),
-                icon = PennyIcons.Copy
+                icon = PennyIcons.Square
             )
             Spacer(Modifier.height(8.dp))
             SecondaryButton(
@@ -972,10 +1475,121 @@ fun BoxScope.FrameSheet(
                 modifier = Modifier.fillMaxWidth(),
                 icon = PennyIcons.Trash,
                 tint = palette.danger,
-                enabled = editor.project.frames.size > 1
+                enabled = frames.size > 1
             )
             Spacer(Modifier.height(6.dp))
         }
+    }
+}
+
+@Composable
+private fun FrameStripItem(
+    project: com.masen.penny937.model.Project,
+    frame: Frame,
+    index: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val shape = RoundedCornerShape(9.dp)
+    val width = (56f * project.width / project.height).coerceIn(34f, 82f).dp
+    val ringWidth by animateDpAsState(
+        targetValue = if (selected) 2.dp else 0.6.dp,
+        animationSpec = PennyMotion.settleDp(),
+        label = "frameStripRingWidth"
+    )
+    val ringColor by animateColorAsState(
+        targetValue = if (selected) palette.accent else palette.hairline,
+        animationSpec = PennyMotion.color(),
+        label = "frameStripRing"
+    )
+    Box(
+        modifier = Modifier
+            .width(width)
+            .height(56.dp)
+            .clip(shape)
+            .background(Color(project.background))
+            .border(ringWidth, ringColor, shape)
+            .clickable(onClick = onClick)
+    ) {
+        FramePreview(
+            project = project,
+            frame = frame,
+            modifier = Modifier.fillMaxSize(),
+            widthPx = 112
+        )
+        Box(
+            Modifier
+                .align(Alignment.TopStart)
+                .padding(3.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(Color.Black.copy(alpha = 0.42f))
+                .padding(horizontal = 5.dp, vertical = 1.dp)
+        ) {
+            Text(
+                "${index + 1}",
+                style = type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 9.sp),
+                color = Color.White
+            )
+        }
+        if (frame.hold > 1) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    "×${frame.hold}",
+                    style = type.caption.copy(fontSize = 9.sp),
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnionSliderRow(editor: EditorModel) {
+    val palette = LocalPenny.current
+    val type = LocalPennyType.current
+    val strength = editor.onionStrength
+    val active = abs(strength) > 0.01f
+    val forward = strength > 0f
+    val tint = when {
+        !active -> palette.textTertiary
+        forward -> Color(0xFFFF5A48)
+        else -> Color(0xFF3B9CFF)
+    }
+    val label = when {
+        !active -> "Off"
+        forward -> "Next ${(strength * 100).roundToInt()}%"
+        else -> "Last ${(-strength * 100).roundToInt()}%"
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            PennyIcons.Onion,
+            contentDescription = "Onion skin",
+            tint = tint,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            label,
+            style = type.caption,
+            color = tint,
+            maxLines = 1,
+            modifier = Modifier.width(66.dp)
+        )
+        Spacer(Modifier.width(2.dp))
+        BipolarSlider(
+            value = strength,
+            onValueChange = { editor.updateOnionStrength(it) },
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -1083,9 +1697,16 @@ fun BoxScope.ExportSheet(visible: Boolean, editor: EditorModel, onDismiss: () ->
             }
 
             if (editor.project.frames.any { frame -> frame.layers.any { it.isReference } }) {
+                val referencesInOutput = editor.project.frames.any { frame ->
+                    frame.layers.any { it.image?.inOutput == true }
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Reference layers are guides and will not be included in the export.",
+                    if (referencesInOutput) {
+                        "References marked \"in export\" are included; guide-only references stay out."
+                    } else {
+                        "Reference layers are guides and will not be included in the export."
+                    },
                     style = type.caption,
                     color = palette.textTertiary,
                     lineHeight = 16.sp
@@ -1194,6 +1815,7 @@ fun BoxScope.ProjectMenuSheet(
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenExport: () -> Unit,
+    onShareProject: (() -> Unit)? = null,
     onDuplicateProject: () -> Unit,
     onDeleteProject: () -> Unit
 ) {
@@ -1247,6 +1869,49 @@ fun BoxScope.ProjectMenuSheet(
                         modifier = Modifier.padding(end = 6.dp)
                     )
                 }
+            }
+            if (onShareProject != null) {
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton(
+                    text = "Export project (.zip)",
+                    onClick = onShareProject,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = PennyIcons.Share
+                )
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "The zip bundles the document and every reference image or video frame it uses.",
+                style = type.caption,
+                color = palette.textTertiary,
+                modifier = Modifier.padding(horizontal = 4.dp),
+                lineHeight = 16.sp
+            )
+            if (editor.saveError != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    editor.saveError!!,
+                    style = type.caption,
+                    color = palette.danger,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton(
+                    text = "Retry save",
+                    onClick = { editor.retrySave() },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = PennyIcons.Check,
+                    tint = palette.accent
+                )
+            } else if (editor.saving) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Saving…",
+                    style = type.caption,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
             Spacer(Modifier.height(16.dp))
             Hairline()

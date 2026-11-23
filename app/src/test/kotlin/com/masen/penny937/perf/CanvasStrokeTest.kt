@@ -10,6 +10,8 @@ import com.masen.penny937.ui.canvas.DrawingCanvasView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlin.math.cos
+import kotlin.math.sin
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -216,6 +218,305 @@ class CanvasStrokeTest {
         println("CANVAS eraser: inked pixels before $before, after $after")
         assertTrue("eraser should remove ink", after < before * 0.85)
         assertTrue("eraser must not wipe the whole layer", after > 0)
+    }
+
+    @Test
+    fun erasingLowerLayerKeepsTheRestOfThatLayerVisible() {
+        setUpView(Tool.PEN)
+        model.addLayer()
+        model.selectLayer(0)
+        val points = FloatArray(20 * 3).also { p ->
+            for (i in 0 until 20) {
+                p[i * 3] = 40f + i * 28f
+                p[i * 3 + 1] = 300f
+                p[i * 3 + 2] = 1f
+            }
+        }
+        model.addStroke(
+            com.masen.penny937.model.Stroke(Tool.PEN, Color.BLACK, 180f, 1f, points),
+            0,
+            0
+        )
+
+        fun render(): android.graphics.Bitmap {
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888
+            )
+            view.draw(android.graphics.Canvas(bitmap))
+            return bitmap
+        }
+
+        fun inkPixels(bitmap: android.graphics.Bitmap): Int {
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            val paper = 0xFFFBF9F4.toInt()
+            val pr = (paper shr 16) and 0xFF
+            val pg = (paper shr 8) and 0xFF
+            val pb = paper and 0xFF
+            var count = 0
+            for (p in pixels) {
+                if ((p ushr 24) and 0xFF != 255) continue
+                val r = (p shr 16) and 0xFF
+                val g = (p shr 8) and 0xFF
+                val b = p and 0xFF
+                if (kotlin.math.abs(r - pr) + kotlin.math.abs(g - pg) +
+                    kotlin.math.abs(b - pb) > 200
+                ) {
+                    count++
+                }
+            }
+            return count
+        }
+
+        val beforeBitmap = render()
+        val before = inkPixels(beforeBitmap)
+        beforeBitmap.recycle()
+        assertTrue("test ink should cover a large area", before > 10_000)
+
+        model.chooseTool(Tool.ERASER)
+        model.changeSize(24f)
+        val down = event(0L, MotionEvent.ACTION_DOWN, 450f, 450f)
+        send(down)
+        down.recycle()
+        val move = event(20L, MotionEvent.ACTION_MOVE, 470f, 470f)
+        send(move)
+        move.recycle()
+
+        val duringBitmap = render()
+        val during = inkPixels(duringBitmap)
+        duringBitmap.recycle()
+
+        val up = event(40L, MotionEvent.ACTION_UP, 470f, 470f)
+        send(up)
+        up.recycle()
+
+        println("CANVAS lower-layer erase: ink before $before, during $during")
+        assertTrue(
+            "the live eraser should cut ink out of the active layer",
+            during < before
+        )
+        assertTrue(
+            "erasing a lower layer must keep the rest of that layer visible",
+            during > before * 0.7
+        )
+        assertEquals("eraser must commit to the lower layer", 2, model.frame.layers[0].strokes.size)
+    }
+
+    @Test
+    fun drawingOnALowerLayerSurvivesCacheEviction() {
+        setUpView(Tool.PEN)
+        model.addLayer()
+        model.addLayer()
+        model.selectLayer(0)
+        // Force the layer cache to consider every extra layer too large. Rendering
+        // the stack then has to skip (not evict) the layer with the live stroke.
+        model.renderer.layerBudget = 1L
+
+        val down = event(0L, MotionEvent.ACTION_DOWN, 300f, 300f)
+        send(down)
+        down.recycle()
+        val move = event(20L, MotionEvent.ACTION_MOVE, 340f, 340f)
+        send(move)
+        move.recycle()
+
+        // This is what onDraw does while the pen is down: it renders every layer
+        // and would previously recycle the active one on a tight cache budget.
+        val frame = android.graphics.Bitmap.createBitmap(
+            view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        view.draw(android.graphics.Canvas(frame))
+        frame.recycle()
+
+        val up = event(40L, MotionEvent.ACTION_UP, 340f, 340f)
+        send(up)
+        up.recycle()
+
+        assertEquals(
+            "the stroke on the lower layer should still commit",
+            1, model.frame.layers[0].strokes.size
+        )
+    }
+
+    /** Two-pointer event used for the layer-shift rotation gesture. */
+    private fun twoPointerEvent(
+        eventTime: Long,
+        action: Int,
+        x0: Float,
+        y0: Float,
+        x1: Float,
+        y1: Float
+    ): MotionEvent {
+        val properties = arrayOf(
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            },
+            MotionEvent.PointerProperties().apply {
+                id = 1
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        )
+        val coords = arrayOf(
+            MotionEvent.PointerCoords().apply {
+                x = x0
+                y = y0
+                pressure = 1f
+                size = 0.2f
+            },
+            MotionEvent.PointerCoords().apply {
+                x = x1
+                y = y1
+                pressure = 1f
+                size = 0.2f
+            }
+        )
+        return MotionEvent.obtain(
+            0L, eventTime, action, 2, properties, coords,
+            0, 0, 1f, 1f, 0, 0,
+            android.view.InputDevice.SOURCE_TOUCHSCREEN, 0
+        )
+    }
+
+    @Test
+    fun twoFingerTwistRotatesTheShiftedLayer() {
+        drawStroke(Tool.PEN)
+        model.beginLayerShift()
+        val started = model.layerShift
+        assertNotNull("shift mode should start", started)
+        val pivotX = started!!.pivotX
+        val pivotY = started.pivotY
+
+        val down = event(600L, MotionEvent.ACTION_DOWN, 300f, 400f, 1f, MotionEvent.TOOL_TYPE_FINGER)
+        send(down)
+        down.recycle()
+        val second = twoPointerEvent(
+            620L,
+            MotionEvent.ACTION_POINTER_DOWN or
+                (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+            300f, 400f, 300f, 500f
+        )
+        send(second)
+        second.recycle()
+        // Fingers are vertical, then horizontal: a 90 degree twist around (300, 450).
+        val move = twoPointerEvent(700L, MotionEvent.ACTION_MOVE, 400f, 450f, 200f, 450f)
+        send(move)
+        move.recycle()
+
+        val shifted = model.layerShift
+        assertNotNull(shifted)
+        assertEquals(90f, shifted!!.rotation, 0.5f)
+        assertEquals("the gesture midpoint did not move", 0f, shifted.dx, 0.001f)
+        assertEquals(0f, shifted.dy, 0.001f)
+
+        val before = model.frame.layers[model.currentLayer].strokes[0]
+        val px = before.pointX(0)
+        val py = before.pointY(0)
+        model.commitLayerShift()
+        val after = model.frame.layers[model.currentLayer].strokes[0]
+        val radians = Math.toRadians(90.0)
+        val expectedX = pivotX + (px - pivotX) * cos(radians).toFloat() -
+            (py - pivotY) * sin(radians).toFloat()
+        val expectedY = pivotY + (px - pivotX) * sin(radians).toFloat() +
+            (py - pivotY) * cos(radians).toFloat()
+        assertEquals(expectedX, after.pointX(0), 0.01f)
+        assertEquals(expectedY, after.pointY(0), 0.01f)
+    }
+
+    @Test
+    fun morphToolPullsTheInkAndCommitsOneUndoableEdit() {
+        drawStroke(Tool.PEN)
+        val layer = model.frame.layers[model.currentLayer]
+        val before = layer.strokes[0].points.copyOf()
+        model.chooseTool(Tool.MORPH)
+        model.changeSize(200f)
+
+        val down = event(600L, MotionEvent.ACTION_DOWN, 400f, 400f)
+        send(down)
+        down.recycle()
+        for (i in 1..6) {
+            val e = event(600L + i * 16L, MotionEvent.ACTION_MOVE, 400f + i * 10f, 400f)
+            send(e)
+            e.recycle()
+        }
+        val up = event(760L, MotionEvent.ACTION_UP, 460f, 400f)
+        send(up)
+        up.recycle()
+
+        assertEquals(null, model.morph)
+        val after = model.frame.layers[model.currentLayer].strokes[0].points
+        var changed = 0
+        for (i in before.indices) if (before[i] != after[i]) changed++
+        assertTrue("the brush should move ink", changed > 0)
+        assertTrue("a morph is undoable", model.canUndo)
+
+        model.undo()
+        val restored = model.frame.layers[model.currentLayer].strokes[0].points
+        for (i in before.indices) assertEquals(before[i], restored[i], 0.0001f)
+    }
+
+    @Test
+    fun morphCancelLeavesTheLayerUntouched() {
+        drawStroke(Tool.PEN)
+        val before = model.frame.layers[model.currentLayer].strokes[0].points.copyOf()
+        model.chooseTool(Tool.MORPH)
+        model.changeSize(200f)
+        val down = event(800L, MotionEvent.ACTION_DOWN, 400f, 400f)
+        send(down)
+        down.recycle()
+        val move = event(820L, MotionEvent.ACTION_MOVE, 460f, 430f)
+        send(move)
+        move.recycle()
+        // Lifting the stylus commits; cancelling the gesture discards the sculpt.
+        val cancel = event(840L, MotionEvent.ACTION_CANCEL, 460f, 430f)
+        send(cancel)
+        cancel.recycle()
+
+        assertEquals(null, model.morph)
+        val after = model.frame.layers[model.currentLayer].strokes[0].points
+        for (i in before.indices) assertEquals(before[i], after[i], 0.0001f)
+    }
+
+    @Test
+    fun morphToolNavigatesWithTwoFingers() {
+        drawStroke(Tool.PEN)
+        model.chooseTool(Tool.MORPH)
+        model.changeSize(200f)
+        val before = model.frame.layers[model.currentLayer].strokes[0].points.copyOf()
+        val beforeScale = view.currentScale()
+
+        val down = event(600L, MotionEvent.ACTION_DOWN, 300f, 400f, 1f, MotionEvent.TOOL_TYPE_FINGER)
+        send(down)
+        down.recycle()
+        val second = twoPointerEvent(
+            620L,
+            MotionEvent.ACTION_POINTER_DOWN or
+                (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+            300f, 400f, 300f, 500f
+        )
+        send(second)
+        second.recycle()
+        val move = twoPointerEvent(700L, MotionEvent.ACTION_MOVE, 220f, 400f, 380f, 400f)
+        send(move)
+        move.recycle()
+
+        assertTrue("two fingers should zoom", view.currentScale() > beforeScale)
+        val after = model.frame.layers[model.currentLayer].strokes[0].points
+        for (i in before.indices) {
+            assertEquals("navigation must not pull ink", before[i], after[i], 0.0001f)
+        }
+        assertEquals(null, model.morph)
+
+        val lift = twoPointerEvent(
+            760L,
+            MotionEvent.ACTION_POINTER_UP or
+                (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+            220f, 400f, 380f, 400f
+        )
+        send(lift)
+        lift.recycle()
+        val up = event(800L, MotionEvent.ACTION_UP, 220f, 400f, 1f, MotionEvent.TOOL_TYPE_FINGER)
+        send(up)
+        up.recycle()
     }
 
     @Test

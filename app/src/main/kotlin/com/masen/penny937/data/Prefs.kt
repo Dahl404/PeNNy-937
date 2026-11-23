@@ -23,6 +23,14 @@ class Prefs(context: Context) {
         get() = sp?.getLong("lastProject", -1L)?.takeIf { it > 0 }
         set(value) = write { putLong("lastProject", value ?: -1L) }
 
+    fun viewportFor(projectId: Long): String? =
+        sp?.getString("viewport_$projectId", null)
+
+    fun setViewportFor(projectId: Long, encoded: String?) = write {
+        if (encoded == null) remove("viewport_$projectId")
+        else putString("viewport_$projectId", encoded)
+    }
+
     var stylusOnly: Boolean
         get() = sp?.getBoolean("stylusOnly", true) ?: true
         set(value) = write { putBoolean("stylusOnly", value) }
@@ -75,4 +83,21 @@ class Prefs(context: Context) {
 
     fun setOpacityFor(tool: Tool, opacity: Float) =
         write { putFloat("opacity_${tool.name}", opacity) }
+
+    fun customSwatch(index: Int): Int? {
+        val preferences = sp ?: return null
+        val key = "swatch_$index"
+        return if (preferences.contains(key)) preferences.getInt(key, 0) else null
+    }
+
+    fun setCustomSwatch(index: Int, color: Int?) = write {
+        val key = "swatch_$index"
+        if (color == null) remove(key) else putInt(key, color)
+    }
+
+    fun customSwatches(): List<Int?> = List(CUSTOM_SWATCH_COUNT) { customSwatch(it) }
+
+    companion object {
+        const val CUSTOM_SWATCH_COUNT = 6
+    }
 }

@@ -11,6 +11,13 @@ import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 
+/** Persistence contract for project documents; the store can be tested with a fake. */
+interface ProjectFormat {
+    fun write(project: Project, output: OutputStream)
+    fun read(input: InputStream): Project?
+    fun readMeta(input: InputStream): ProjectMeta?
+}
+
 /**
  * Compact binary project format. Pure JVM so it can be unit-tested without a device.
  *
@@ -19,13 +26,17 @@ import java.io.OutputStream
  *   per frame: id, hold, layerCount
  *     per layer: id, name, visible, opacity, strokeCount
  *       per stroke: tool, color, width, opacity, pointCount, [x, y, pressure] * pointCount
+ *
+ * Version 2 added layer locks and reference images. Version 3 added the
+ * [LayerImage.inOutput] flag that includes a reference in the export. Version 4
+ * added [Layer.flattened] raster ink produced by merging incompatible layers.
  */
-object ProjectCodec {
+object ProjectCodec : ProjectFormat {
     const val MAGIC = 0x50393337
-    const val VERSION = 2
+    const val VERSION = 4
     const val MIN_VERSION = 1
 
-    fun write(project: Project, output: OutputStream) {
+    override fun write(project: Project, output: OutputStream) {
         ProjectBytes.Out(output).use { out ->
             out.writeInt(MAGIC)
             out.writeInt(VERSION)
@@ -59,7 +70,9 @@ object ProjectCodec {
                         out.writeFloat(image.width)
                         out.writeFloat(image.height)
                         out.writeFloat(image.rotation)
+                        out.writeBoolean(image.inOutput)
                     }
+                    out.writeBoolean(layer.flattened)
                     out.writeInt(layer.strokes.size)
                     for (stroke in layer.strokes) {
                         out.writeByte(stroke.tool.ordinal)
@@ -74,7 +87,7 @@ object ProjectCodec {
         }
     }
 
-    fun read(input: InputStream): Project? = runCatching {
+    override fun read(input: InputStream): Project? = runCatching {
         ProjectBytes.In(input).use { data ->
             require(data.readInt() == MAGIC) { "Not a PeNNy project" }
             val version = data.readInt()
@@ -109,9 +122,11 @@ object ProjectCodec {
                             centerY = data.readFloat(),
                             width = data.readFloat(),
                             height = data.readFloat(),
-                            rotation = data.readFloat()
+                            rotation = data.readFloat(),
+                            inOutput = version >= 3 && data.readBoolean()
                         )
                     } else null
+                    val flattened = version >= 4 && data.readBoolean()
                     val strokeCount = data.readInt()
                     val strokes = ArrayList<Stroke>(strokeCount)
                     repeat(strokeCount) {
@@ -132,7 +147,8 @@ object ProjectCodec {
                             opacity = opacity,
                             locked = locked,
                             image = image,
-                            strokes = strokes
+                            strokes = strokes,
+                            flattened = flattened
                         )
                     )
                 }
@@ -165,7 +181,7 @@ object ProjectCodec {
         }
     }.getOrNull()
 
-    fun readMeta(input: InputStream): ProjectMeta? = runCatching {
+    override fun readMeta(input: InputStream): ProjectMeta? = runCatching {
         ProjectBytes.In(input).use { data ->
             require(data.readInt() == MAGIC)
             require(data.readInt() in MIN_VERSION..VERSION)

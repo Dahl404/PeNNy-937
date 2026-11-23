@@ -1,6 +1,9 @@
 package com.masen.penny937.ui
 
 import android.graphics.Bitmap
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -88,10 +91,16 @@ fun HomeScreen(
     onOpen: (Long) -> Unit,
     onCreate: (String, Int, Int, Int, Int) -> Unit,
     onDuplicate: (Long) -> Unit,
-    onDelete: (Long) -> Unit
+    onDelete: (Long) -> Unit,
+    onImportArchive: (Uri) -> Unit
 ) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
+    val pickArchive = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onImportArchive(uri)
+    }
 
     var showNew by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
@@ -116,12 +125,25 @@ fun HomeScreen(
                 HomeHeader(onAbout = { showAbout = true })
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                PrimaryButton(
-                    text = if (projects.isEmpty()) "Start a project" else "New project",
-                    onClick = { showNew = true },
-                    icon = PennyIcons.Plus,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    PrimaryButton(
+                        text = if (projects.isEmpty()) "Start a project" else "New project",
+                        onClick = { showNew = true },
+                        icon = PennyIcons.Plus,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    SecondaryButton(
+                        text = "Import project (.zip)",
+                        onClick = {
+                            pickArchive.launch(
+                                arrayOf("application/zip", "application/octet-stream")
+                            )
+                        },
+                        icon = PennyIcons.Image,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

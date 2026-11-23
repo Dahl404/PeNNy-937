@@ -15,11 +15,11 @@ class ProjectOpsTest {
         background = 0xFFFBF9F4.toInt()
     )
 
-    private fun stroke(tool: Tool = Tool.PEN): Stroke = Stroke(
+    private fun stroke(tool: Tool = Tool.PEN, opacity: Float = 1f): Stroke = Stroke(
         tool = tool,
         color = 0xFF000000.toInt(),
         width = 8f,
-        opacity = 1f,
+        opacity = opacity,
         points = floatArrayOf(10f, 10f, 1f, 20f, 20f, 0.5f, 30f, 30f, 0.2f)
     )
 
@@ -115,6 +115,41 @@ class ProjectOpsTest {
     }
 
     @Test
+    fun transformLayerRotatesStrokesAndReferenceAroundThePivot() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        p = ProjectOps.addStroke(p, 0, 0, stroke())
+        val image = LayerImage("ref.png", 10, 10, 50f, 60f, 10f, 10f)
+        p = ProjectOps.updateLayer(p, 0, 1) { it.copy(image = image) }
+
+        // 90 degrees clockwise around the origin, then translate by (5, -5).
+        val rotated = ProjectOps.transformLayer(p, 0, 0, 5f, -5f, 90f, 0f, 0f)
+        val s = rotated.frames[0].layers[0].strokes[0]
+        // (10, 10) -> (-10, 10) + (5, -5) = (-5, 5)
+        assertEquals(-5f, s.pointX(0), 0.001f)
+        assertEquals(5f, s.pointY(0), 0.001f)
+        assertEquals(0.5f, s.pointPressure(1), 0.001f)
+        // Other layers, and the untouched snapshot, stay put.
+        assertEquals(50f, rotated.frames[0].layers[1].image!!.centerX, 0.001f)
+        assertEquals(10f, p.frames[0].layers[0].strokes[0].pointX(0), 0.001f)
+
+        // Rotating around the content centre flips it in place.
+        val flipped = ProjectOps.transformLayer(p, 0, 0, 0f, 0f, 180f, 20f, 20f)
+        val f = flipped.frames[0].layers[0].strokes[0]
+        assertEquals(30f, f.pointX(0), 0.001f)
+        assertEquals(30f, f.pointY(0), 0.001f)
+        assertEquals(10f, f.pointX(2), 0.001f)
+        assertEquals(10f, f.pointY(2), 0.001f)
+
+        // A reference rotates with its layer.
+        val reference = ProjectOps.transformLayer(p, 0, 1, 0f, 0f, 90f, 0f, 0f)
+        val ref = reference.frames[0].layers[1].image!!
+        assertEquals(-60f, ref.centerX, 0.001f)
+        assertEquals(50f, ref.centerY, 0.001f)
+        assertEquals(90f, ref.rotation, 0.001f)
+    }
+
+    @Test
     fun movingFrameReordersTheTimeline() {
         var p = project()
         p = ProjectOps.addFrameAfter(p, 0)
@@ -163,19 +198,32 @@ class ProjectOpsTest {
     }
 
     @Test
-    fun lockedOrReferenceLayersDoNotMergeOrClear() {
+    fun lockedLayersMergeAndFlattenedInkCanBeCleared() {
         var p = project()
         p = ProjectOps.addLayer(p, 0, 0).first
         p = ProjectOps.addStroke(p, 0, 0, stroke(Tool.PEN))
         p = ProjectOps.addStroke(p, 0, 1, stroke(Tool.PEN))
         p = ProjectOps.updateLayer(p, 0, 1) { it.copy(locked = true) }
-        val mergeAttempt = ProjectOps.mergeLayerDown(p, 0, 1).first
-        assertEquals(2, mergeAttempt.frames[0].layers.size)
+        val merged = ProjectOps.mergeLayerDown(p, 0, 1).first
+        assertEquals(1, merged.frames[0].layers.size)
+        assertEquals(2, merged.frames[0].layers[0].strokes.size)
 
-        val image = LayerImage("ref.png", 10, 10, 5f, 5f, 10f, 10f)
-        p = ProjectOps.updateLayer(p, 0, 0) { it.copy(image = image) }
+        // Raster ink from a merge is ordinary layer content: Clear removes it.
+        val image = LayerImage("merged.png", 10, 10, 5f, 5f, 10f, 10f, inOutput = true)
+        p = ProjectOps.updateLayer(merged, 0, 0) {
+            it.copy(image = image, flattened = true, strokes = listOf(stroke()))
+        }
         val cleared = ProjectOps.clearLayer(p, 0, 0)
-        assertEquals(1, cleared.frames[0].layers[0].strokes.size)
+        assertEquals(0, cleared.frames[0].layers[0].strokes.size)
+        assertEquals(null, cleared.frames[0].layers[0].image)
+        assertEquals(false, cleared.frames[0].layers[0].flattened)
+
+        // References still cannot be cleared or drawn over.
+        p = ProjectOps.addReferenceLayer(
+            p, 0, ProjectFactory.referenceLayer("Reference", image)
+        )
+        val afterReferenceClear = ProjectOps.clearLayer(p, 0, 0)
+        assertEquals(image, afterReferenceClear.frames[0].layers[0].image)
     }
 
     private fun videoImage(index: Int) = LayerImage(
@@ -263,6 +311,110 @@ class ProjectOpsTest {
         p = ProjectOps.mergeLayerDown(p, 0, 1).first
         assertEquals(1, p.frames[0].layers.size)
         assertEquals(2, p.frames[0].layers[0].strokes.size)
+    }
+
+    @Test
+    fun mergeDownBakesBothLayerOpacitiesIntoTheStrokes() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        p = ProjectOps.addStroke(p, 0, 0, stroke(Tool.PEN, opacity = 0.8f))
+        p = ProjectOps.addStroke(p, 0, 1, stroke(Tool.MARKER, opacity = 0.5f))
+        p = ProjectOps.updateLayer(p, 0, 0) { it.copy(opacity = 0.5f) }
+        p = ProjectOps.updateLayer(p, 0, 1) { it.copy(opacity = 0.4f) }
+        val before = p
+
+        p = ProjectOps.mergeLayerDown(p, 0, 1).first
+        val merged = p.frames[0].layers.single()
+        assertEquals(1f, merged.opacity, 0.0001f)
+        assertEquals(true, merged.visible)
+        assertEquals(0.4f, merged.strokes[0].opacity, 0.0001f)
+        assertEquals(0.2f, merged.strokes[1].opacity, 0.0001f)
+        // The untouched project snapshot still has both layers.
+        assertEquals(2, before.frames[0].layers.size)
+    }
+
+    @Test
+    fun mergeDownResolvesVisibilityByAppearance() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        p = ProjectOps.addStroke(p, 0, 0, stroke())
+        p = ProjectOps.addStroke(p, 0, 1, stroke())
+        p = ProjectOps.updateLayer(p, 0, 0) { it.copy(visible = false) }
+        p = ProjectOps.updateLayer(p, 0, 1) { it.copy(visible = false) }
+        assertTrue(ProjectOps.canMergeLayerDown(p.frameAt(0), 1))
+        val merged = ProjectOps.mergeLayerDown(p, 0, 1).first.frames[0].layers.single()
+        assertEquals(false, merged.visible)
+        assertEquals(2, merged.strokes.size)
+
+        // Hidden lower + visible upper: only the upper layer was on screen, so the
+        // merge result is the upper content, still visible.
+        var mixed = project()
+        mixed = ProjectOps.addLayer(mixed, 0, 0).first
+        mixed = ProjectOps.addStroke(mixed, 0, 0, stroke(Tool.PEN))
+        mixed = ProjectOps.addStroke(mixed, 0, 1, stroke(Tool.MARKER))
+        mixed = ProjectOps.updateLayer(mixed, 0, 0) { it.copy(visible = false) }
+        assertTrue(ProjectOps.canMergeLayerDown(mixed.frameAt(0), 1))
+        val upperOnly = ProjectOps.mergeLayerDown(mixed, 0, 1).first.frames[0].layers.single()
+        assertEquals(true, upperOnly.visible)
+        assertEquals(Tool.MARKER, upperOnly.strokes.single().tool)
+
+        // Visible lower + hidden upper: the upper layer contributed nothing, so it
+        // is dropped and the lower layer is untouched.
+        var hiddenUpper = project()
+        hiddenUpper = ProjectOps.addLayer(hiddenUpper, 0, 0).first
+        hiddenUpper = ProjectOps.addStroke(hiddenUpper, 0, 0, stroke(Tool.PEN))
+        hiddenUpper = ProjectOps.addStroke(hiddenUpper, 0, 1, stroke(Tool.MARKER))
+        hiddenUpper = ProjectOps.updateLayer(hiddenUpper, 0, 1) { it.copy(visible = false) }
+        val lowerOnly = ProjectOps.mergeLayerDown(hiddenUpper, 0, 1).first.frames[0].layers.single()
+        assertEquals(Tool.PEN, lowerOnly.strokes.single().tool)
+    }
+
+    @Test
+    fun mergeDownFlattensUpperErasersAndKeepsLowerErasers() {
+        var p = project()
+        p = ProjectOps.addLayer(p, 0, 0).first
+        p = ProjectOps.addStroke(p, 0, 0, stroke(Tool.ERASER, opacity = 1f))
+        p = ProjectOps.addStroke(p, 0, 1, stroke(Tool.ERASER, opacity = 1f))
+        assertTrue(ProjectOps.canMergeLayerDown(p.frameAt(0), 1))
+        assertTrue(ProjectOps.mergeNeedsFlattening(p.frameAt(0).layers[0], p.frameAt(0).layers[1]))
+
+        val flattenedImage = LayerImage("merged.png", 1080, 1920, 540f, 960f, 1080f, 1920f, inOutput = true)
+        val merged = ProjectOps.mergeLayerDown(p, 0, 1, flattenedImage).first.frames[0].layers.single()
+        assertEquals(true, merged.flattened)
+        assertEquals(flattenedImage, merged.image)
+        assertEquals(0, merged.strokes.size)
+        assertEquals(1f, merged.opacity, 0.0001f)
+
+        // A lower eraser already only affects the lower layer's earlier ink, so it
+        // stays valid after a vector merge; an upper eraser needs raster ink above.
+        val lowerOnly = ProjectOps.deleteLayer(p, 0, 1).first
+        var withoutUpper = ProjectOps.addStroke(lowerOnly, 0, 0, stroke(Tool.PEN))
+        withoutUpper = ProjectOps.addLayer(withoutUpper, 0, 0).first
+        withoutUpper = ProjectOps.addStroke(withoutUpper, 0, 1, stroke(Tool.PEN))
+        withoutUpper = ProjectOps.updateLayer(withoutUpper, 0, 0) { it.copy(opacity = 0.5f) }
+        assertTrue(ProjectOps.canMergeLayerDown(withoutUpper.frameAt(0), 1))
+        assertEquals(false, ProjectOps.mergeNeedsFlattening(
+            withoutUpper.frameAt(0).layers[0], withoutUpper.frameAt(0).layers[1]
+        ))
+        val vectorMerged = ProjectOps.mergeLayerDown(withoutUpper, 0, 1).first.frames[0].layers.single()
+        assertEquals(Tool.ERASER, vectorMerged.strokes[0].tool)
+        assertEquals(1f, vectorMerged.strokes[0].opacity, 0.0001f)
+        assertEquals(0.5f, vectorMerged.strokes[1].opacity, 0.0001f)
+    }
+
+    @Test
+    fun referenceOutputFlagTravelsWithTheImage() {
+        var p = project()
+        val image = LayerImage("ref.png", 10, 10, 50f, 60f, 10f, 10f)
+        p = ProjectOps.addReferenceLayer(p, 0, ProjectFactory.referenceLayer("Guide", image))
+        assertEquals(false, p.frames[0].layers[0].image!!.inOutput)
+        p = ProjectOps.setReferenceInOutput(p, 0, 0, true)
+        assertEquals(true, p.frames[0].layers[0].image!!.inOutput)
+        p = ProjectOps.setReferenceInOutput(p, 0, 0, false)
+        assertEquals(false, p.frames[0].layers[0].image!!.inOutput)
+        // Non-reference layers are untouched.
+        p = ProjectOps.setReferenceInOutput(p, 0, 1, true)
+        assertEquals(null, p.frames[0].layers[1].image)
     }
 
     @Test

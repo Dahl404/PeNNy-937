@@ -1,6 +1,7 @@
 package com.masen.penny937
 
 import android.app.Application
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -8,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.masen.penny937.data.Prefs
 import com.masen.penny937.data.ProjectMeta
+import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.data.ProjectStore
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.model.Project
@@ -56,6 +58,18 @@ class PennyViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importArchive(uri: Uri) {
+        editorScope.launch {
+            val imported = withContext(Dispatchers.IO) {
+                getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?.use { store.importArchive(it) }
+            } ?: return@launch
+            prefs.lastProjectId = imported.id
+            editor = newEditor(imported)
+            refresh()
+        }
+    }
+
     fun openProject(id: Long) {
         editorScope.launch {
             val project = withContext(Dispatchers.IO) { store.load(id) } ?: return@launch
@@ -78,7 +92,10 @@ class PennyViewModel(application: Application) : AndroidViewModel(application) {
         editorScope.launch {
             val source = withContext(Dispatchers.IO) { store.load(id) } ?: return@launch
             val copy = ProjectFactory.duplicateProject(source)
-            withContext(Dispatchers.IO) { store.save(copy) }
+            withContext(Dispatchers.IO) {
+                ReferenceFiles.copyProject(source.id, copy.id, source.referencedFiles())
+                store.save(copy)
+            }
             refresh()
         }
     }
@@ -86,7 +103,10 @@ class PennyViewModel(application: Application) : AndroidViewModel(application) {
     fun duplicateAndOpen(project: Project) {
         editorScope.launch {
             val copy = ProjectFactory.duplicateProject(project)
-            withContext(Dispatchers.IO) { store.save(copy) }
+            withContext(Dispatchers.IO) {
+                ReferenceFiles.copyProject(project.id, copy.id, project.referencedFiles())
+                store.save(copy)
+            }
             editor?.dispose()
             prefs.lastProjectId = copy.id
             editor = newEditor(copy)
@@ -102,6 +122,7 @@ class PennyViewModel(application: Application) : AndroidViewModel(application) {
         if (prefs.lastProjectId == id) prefs.lastProjectId = null
         editorScope.launch {
             withContext(Dispatchers.IO) { store.delete(id) }
+            prefs.setViewportFor(id, null)
             refresh()
         }
     }
@@ -113,6 +134,7 @@ class PennyViewModel(application: Application) : AndroidViewModel(application) {
         if (prefs.lastProjectId == id) prefs.lastProjectId = null
         editorScope.launch {
             model.purge()
+            prefs.setViewportFor(id, null)
             refresh()
         }
     }

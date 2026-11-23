@@ -8,6 +8,8 @@ import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 data class ImportedReference(
     val fileName: String,
@@ -16,51 +18,194 @@ data class ImportedReference(
 )
 
 /**
- * Imported reference images live in app storage and are decoded lazily.
- * Layers only store the file name, so projects stay small and portable.
+ * Imported references live in app storage and are decoded lazily. Each project gets
+ * its own folder, so deleting a project cannot remove another project's references
+ * and a duplicate can own independent copies.
+ *
+ * Older builds stored references directly in `references/`. Those files are still
+ * readable and are copied into a project folder the first time it is opened.
  */
 object ReferenceFiles {
-    private var dir: File? = null
+    private var root: File? = null
     private var counter = 0
 
-    private val cache = object : LinkedHashMap<String, Bitmap>(4, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean =
-            size > 3
+    private data class Key(val projectId: Long, val name: String)
+
+    private val cache = object : LinkedHashMap<Key, Bitmap>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, Bitmap>): Boolean =
+            size > 4
     }
 
     fun init(context: Context) {
-        dir = File(context.filesDir, "references").apply { mkdirs() }
+        root = File(context.filesDir, "references").apply { mkdirs() }
+    }
+
+    private fun projectDir(projectId: Long): File? = root?.let { File(it, projectId.toString()) }
+
+    private fun projectDirForWrite(projectId: Long): File? =
+        projectDir(projectId)?.apply { mkdirs() }
+
+    /** Rejects separators and `..` so a crafted project cannot escape its folder. */
+    private fun safeName(name: String): String? {
+        if (name.isBlank()) return null
+        return if (File(name).name == name) name else null
+    }
+
+    private fun fileFor(projectId: Long, name: String): File? {
+        val safe = safeName(name) ?: return null
+        return projectDir(projectId)?.let { File(it, safe) }
+    }
+
+    private fun legacyFile(name: String): File? {
+        val safe = safeName(name) ?: return null
+        return root?.let { File(it, safe) }
     }
 
     @Synchronized
-    fun bitmap(name: String): Bitmap? {
-        cache[name]?.let { return it }
-        val folder = dir ?: return null
-        val file = File(folder, name)
-        if (!file.exists()) return null
+    fun bitmap(projectId: Long, name: String): Bitmap? {
+        val key = Key(projectId, name)
+        cache[key]?.let { return it }
+        val file = fileFor(projectId, name)?.takeIf { it.exists() }
+            ?: legacyFile(name)?.takeIf { it.exists() }
+            ?: return null
         val bitmap = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
             ?: return null
-        cache[name] = bitmap
+        cache[key] = bitmap
         return bitmap
     }
 
-    fun saveJpeg(name: String, bitmap: Bitmap, quality: Int = 86): Boolean {
-        val folder = dir ?: return false
+    fun saveJpeg(projectId: Long, name: String, bitmap: Bitmap, quality: Int = 86): Boolean {
+        val folder = projectDirForWrite(projectId) ?: return false
+        val safe = safeName(name) ?: return false
         return runCatching {
-            FileOutputStream(File(folder, name)).use { out ->
+            FileOutputStream(File(folder, safe)).use { out ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
             }
         }.getOrDefault(false)
     }
 
-    fun delete(name: String) {
-        synchronized(this) { cache.remove(name) }
-        dir?.let { File(it, name).delete() }
+    fun savePng(projectId: Long, name: String, bitmap: Bitmap): Boolean {
+        val folder = projectDirForWrite(projectId) ?: return false
+        val safe = safeName(name) ?: return false
+        return runCatching {
+            FileOutputStream(File(folder, safe)).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+        }.getOrDefault(false)
     }
 
-    /** Copy + downscale + EXIF-orient a picked image into app storage. */
-    fun import(context: Context, uri: Uri): ImportedReference? {
-        val folder = dir ?: File(context.filesDir, "references").apply { mkdirs() }.also { dir = it }
+    /** Raw bytes of one reference, used by project archives. */
+    fun readBytes(projectId: Long, name: String): ByteArray? {
+        val file = fileFor(projectId, name)?.takeIf { it.exists() }
+            ?: legacyFile(name)?.takeIf { it.exists() }
+            ?: return null
+        return runCatching { file.readBytes() }.getOrNull()
+    }
+
+    fun writeBytes(projectId: Long, name: String, bytes: ByteArray): Boolean {
+        val folder = projectDirForWrite(projectId) ?: return false
+        val safe = safeName(name) ?: return false
+        return runCatching {
+            File(folder, safe).writeBytes(bytes)
+        }.isSuccess
+    }
+
+    fun delete(projectId: Long, name: String) {
+        synchronized(this) { cache.remove(Key(projectId, name)) }
+        fileFor(projectId, name)?.delete()
+    }
+
+    /** Removes every reference owned by a deleted project. */
+    fun deleteProject(projectId: Long) {
+        synchronized(this) {
+            cache.keys.removeAll { it.projectId == projectId }
+        }
+        projectDir(projectId)?.deleteRecursively()
+    }
+
+    /**
+     * Deletes files in a project folder that the project no longer references.
+     * Called when a project is opened (after a crash or a cancelled import) and
+     * whenever an import is cancelled.
+     */
+    fun gc(projectId: Long, referenced: Set<String>) {
+        val folder = projectDir(projectId) ?: return
+        val files = folder.listFiles() ?: return
+        val removed = HashSet<String>()
+        for (file in files) {
+            if (file.isFile && file.name !in referenced) {
+                if (file.delete()) removed.add(file.name)
+            }
+        }
+        if (removed.isNotEmpty()) {
+            synchronized(this) {
+                cache.keys.removeAll { it.projectId == projectId && it.name in removed }
+            }
+        }
+    }
+
+    /**
+     * Copies the references a duplicated project needs into its own folder.
+     * Returns false when a source file is missing, so callers can keep the
+     * duplicate usable by letting the missing image render as a placeholder.
+     */
+    fun copyProject(fromProjectId: Long, toProjectId: Long, names: Set<String>): Boolean {
+        if (names.isEmpty()) return true
+        val target = projectDirForWrite(toProjectId) ?: return false
+        var complete = true
+        for (name in names) {
+            val safe = safeName(name)
+            if (safe == null) {
+                complete = false
+                continue
+            }
+            val destination = File(target, safe)
+            if (destination.exists()) continue
+            val source = fileFor(fromProjectId, safe)?.takeIf { it.exists() }
+                ?: legacyFile(name)?.takeIf { it.exists() }
+            if (source == null) {
+                complete = false
+                continue
+            }
+            val copied = runCatching {
+                try {
+                    Files.copy(
+                        source.toPath(), destination.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING
+                    )
+                } catch (_: Exception) {
+                    source.copyTo(destination, overwrite = true)
+                }
+                true
+            }.getOrDefault(false)
+            if (!copied) complete = false
+        }
+        return complete
+    }
+
+    /**
+     * Copies references from the legacy shared folder into this project's folder.
+     * Safe to call repeatedly; existing files win.
+     */
+    fun migrateLegacy(projectId: Long, referenced: Set<String>) {
+        if (referenced.isEmpty()) return
+        val target = projectDirForWrite(projectId) ?: return
+        for (name in referenced) {
+            val safe = safeName(name) ?: continue
+            val destination = File(target, safe)
+            if (destination.exists()) continue
+            val source = legacyFile(safe)?.takeIf { it.exists() } ?: continue
+            runCatching {
+                Files.copy(source.toPath(), destination.toPath())
+            }.recoverCatching {
+                source.copyTo(destination, overwrite = false)
+            }
+        }
+    }
+
+    /** Copy + downscale + EXIF-orient a picked image into this project's folder. */
+    fun import(context: Context, projectId: Long, uri: Uri): ImportedReference? {
+        val folder = projectDirForWrite(projectId) ?: return null
         return runCatching {
             val resolver = context.contentResolver
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -101,15 +246,18 @@ object ReferenceFiles {
                 }
             }
 
-            val name = "ref-${System.currentTimeMillis()}-${counter++}.png"
+            val name = nextName()
             val target = File(folder, name)
             FileOutputStream(target).use { out ->
                 decoded.compress(Bitmap.CompressFormat.PNG, 100, out)
             }
-            synchronized(this) { cache[name] = decoded }
+            synchronized(this) { cache[Key(projectId, name)] = decoded }
             ImportedReference(name, decoded.width, decoded.height)
         }.getOrNull()
     }
+
+    @Synchronized
+    private fun nextName(): String = "ref-${System.currentTimeMillis()}-${counter++}.png"
 
     private fun sampleSize(width: Int, height: Int, max: Int = 2048): Int {
         var sample = 1

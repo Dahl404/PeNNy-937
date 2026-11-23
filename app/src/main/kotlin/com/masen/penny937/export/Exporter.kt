@@ -89,8 +89,14 @@ object Exporter {
             val gif = GifWriter(BufferedOutputStream(fos, 1 shl 16), width, height, loop = true)
             var written = 0
             var index = 0
-            val batch = frameParallelism * 2
+            val desiredBatch = frameParallelism * 2
+            val frameBytes = ExportMemory.gifFrameBytes(width, height)
             while (index < frames.size) {
+                // Re-evaluate each batch: a transient allocation elsewhere should
+                // shrink the next batch instead of pushing the process to the limit.
+                val batch = ExportMemory.framesPerBatch(
+                    frameBytes, desiredBatch, ExportMemory.runtimeBudget()
+                )
                 val end = min(index + batch, frames.size)
                 val encoded = coroutineScope {
                     (index until end).map { i ->
@@ -141,8 +147,12 @@ object Exporter {
                 zip.closeEntry()
                 var written = 0
                 var index = 0
-                val batch = frameParallelism * 2
+                val desiredBatch = frameParallelism * 2
+                val frameBytes = ExportMemory.pngFrameBytes(project.width, project.height)
                 while (index < frames.size) {
+                    val batch = ExportMemory.framesPerBatch(
+                        frameBytes, desiredBatch, ExportMemory.runtimeBudget()
+                    )
                     val end = min(index + batch, frames.size)
                     val pngs = coroutineScope {
                         (index until end).map { i ->

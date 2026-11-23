@@ -4,8 +4,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +19,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.masen.penny937.PennyViewModel
 import com.masen.penny937.ui.editor.EditorScreen
 import com.masen.penny937.ui.theme.LocalPenny
+import com.masen.penny937.ui.theme.PennyMotion
 
 @Composable
 fun PennyApp(vm: PennyViewModel = viewModel()) {
@@ -38,9 +39,22 @@ fun PennyApp(vm: PennyViewModel = viewModel()) {
             targetState = vm.editor,
             transitionSpec = {
                 val enteringEditor = targetState != null
-                (fadeIn(tween(240)) + slideInHorizontally(tween(320)) { value ->
-                    if (enteringEditor) value / 12 else -value / 12
-                }).togetherWith(fadeOut(tween(180)))
+                // Keep the canvas stationary while it fades in: transforming an
+                // AndroidView mid-composition reads as a stutter. The home screen
+                // carries the direction instead.
+                val enter = if (enteringEditor) {
+                    fadeIn(PennyMotion.fadeInFloat())
+                } else {
+                    fadeIn(PennyMotion.fadeInFloat()) +
+                        slideInHorizontally(PennyMotion.gentleOffset()) { it / 14 }
+                }
+                val exit = if (enteringEditor) {
+                    fadeOut(PennyMotion.fadeOutFloat()) +
+                        slideOutHorizontally(PennyMotion.gentleOffset()) { -it / 14 }
+                } else {
+                    fadeOut(PennyMotion.fadeOutFloat())
+                }
+                enter togetherWith exit
             },
             label = "screen"
         ) { model ->
@@ -59,7 +73,8 @@ fun PennyApp(vm: PennyViewModel = viewModel()) {
                     onOpen = vm::openProject,
                     onCreate = vm::createProject,
                     onDuplicate = vm::duplicateProject,
-                    onDelete = vm::deleteProject
+                    onDelete = vm::deleteProject,
+                    onImportArchive = vm::importArchive
                 )
             }
         }

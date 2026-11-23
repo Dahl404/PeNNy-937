@@ -80,8 +80,14 @@ object VideoExporter {
             encoder.start()
 
             // Render frames ahead of the encoder so vector rasterisation overlaps with
-            // encoding; the channel bounds memory to a handful of frames.
-            val prepared = Channel<Prepared>(PIPELINE_DEPTH)
+            // encoding; the channel is bounded by the frame size, not just a constant,
+            // so a 4K export cannot queue four full-resolution ARGB buffers.
+            val depth = ExportMemory.framesPerBatch(
+                ExportMemory.videoFrameBytes(width, height),
+                PIPELINE_DEPTH,
+                ExportMemory.runtimeBudget()
+            )
+            val prepared = Channel<Prepared>(depth)
             val producer = launch(Dispatchers.Default) {
                 try {
                     for (index in frames.indices) {

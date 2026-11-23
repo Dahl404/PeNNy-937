@@ -1,6 +1,5 @@
 package com.masen.penny937.ui.canvas
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -13,7 +12,6 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import android.view.animation.DecelerateInterpolator
 import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.editor.EditorModel
 import com.masen.penny937.editor.ReferencePlacement
@@ -25,8 +23,11 @@ import com.masen.penny937.model.Tool
 import com.masen.penny937.paint.Ink
 import com.masen.penny937.paint.Shapes
 import com.masen.penny937.paint.StrokeInker
+import com.masen.penny937.paint.Warp
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -83,13 +84,30 @@ class DrawingCanvasView @JvmOverloads constructor(
     private val paperRect = RectF()
     private val bitmapRect = RectF()
 
-    private var scale = 1f
-    private var offsetX = 0f
-    private var offsetY = 0f
-    private var fitScale = 1f
-    private var userZoomed = false
-    private var seenWidth = -1
-    private var seenHeight = -1
+    private val viewport = CanvasViewport(
+        viewWidth = { width },
+        viewHeight = { height },
+        fitPaddingPx = { dp(18f) },
+        edgeMarginPx = { dp(72f) },
+        onChange = { invalidate() }
+    )
+
+    private var pendingViewport: CanvasViewport.State? = null
+
+    private var scale: Float
+        get() = viewport.scale
+        set(value) { viewport.scale = value }
+    private var offsetX: Float
+        get() = viewport.offsetX
+        set(value) { viewport.offsetX = value }
+    private var offsetY: Float
+        get() = viewport.offsetY
+        set(value) { viewport.offsetY = value }
+    private val fitScale: Float
+        get() = viewport.fitScale
+    private var userZoomed: Boolean
+        get() = viewport.userZoomed
+        set(value) { viewport.userZoomed = value }
 
     private var activePointerId = -1
     private var mode = Mode.NONE
@@ -140,7 +158,6 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var lastTapX = 0f
     private var lastTapY = 0f
     private var suppressUntilUp = false
-    private var animator: ValueAnimator? = null
 
     private enum class PlaceMode { NONE, ONE, TWO }
 
@@ -165,6 +182,24 @@ class DrawingCanvasView @JvmOverloads constructor(
     private var shiftPointer = -1
     private var shiftLastX = 0f
     private var shiftLastY = 0f
+    private var shiftPinchA = -1
+    private var shiftPinchB = -1
+    private var shiftBaseDx = 0f
+    private var shiftBaseDy = 0f
+    private var shiftBaseRotation = 0f
+    private var shiftBaseAngle = 0f
+    private var shiftBaseMidX = 0f
+    private var shiftBaseMidY = 0f
+
+    private var morphSession: MorphSession? = null
+    private var morphPointer = -1
+    private var morphLastX = 0f
+    private var morphLastY = 0f
+    private var morphAtX = 0f
+    private var morphAtY = 0f
+    private var morphPanning = false
+    private var morphPinching = false
+    private val patchRect = RectF()
 
     private enum class Mode { NONE, DRAW, SHAPE, PAN, PINCH }
 
@@ -177,9 +212,17 @@ class DrawingCanvasView @JvmOverloads constructor(
             previous?.project?.height != model.project.height
         val projectChanged = previous?.project?.id != model.project.id
         if (projectChanged) {
+            persistViewport(previous)
             cancelStroke()
             userZoomed = false
-            fitToPaper()
+            pendingViewport = CanvasViewportCodec.decode(model.savedViewportState())
+            if (pendingViewport == null) {
+                fitToPaper()
+            } else if (width > 0 && height > 0) {
+                viewport.updateProject(model.project.width, model.project.height)
+                viewport.restore(pendingViewport!!)
+                pendingViewport = null
+            }
         } else if (dimsChanged) {
             cancelStroke()
             userZoomed = false
@@ -197,6 +240,7 @@ class DrawingCanvasView @JvmOverloads constructor(
             cancelStroke()
         }
         if (model.eyedropper == null) eyedropperActive = false
+        syncMorphSession(model)
         invalidate()
     }
 
@@ -207,34 +251,25 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     fun fitToPaper(animate: Boolean = false) {
         val project = editor?.project ?: return
-        if (width == 0 || height == 0) return
-        val padding = dp(18f)
-        val availableW = (width - padding * 2f).coerceAtLeast(1f)
-        val availableH = (height - padding * 2f).coerceAtLeast(1f)
-        val newScale = min(availableW / project.width, availableH / project.height).coerceAtLeast(0.001f)
-        fitScale = newScale
-        val tx = (width - project.width * newScale) / 2f
-        val ty = (height - project.height * newScale) / 2f
-        userZoomed = false
-        if (animate) animateTo(newScale, tx, ty) else {
-            animator?.cancel()
-            scale = newScale
-            offsetX = tx
-            offsetY = ty
-            clampOffsets()
-            invalidate()
-        }
+        viewport.updateProject(project.width, project.height)
+        viewport.fitToPaper(animate)
     }
 
-    fun currentScale(): Float = scale
+    fun currentScale(): Float = viewport.currentScale()
+
+    /**
+     * Quantise the current zoom to one of a few cache scales. Zooming then only
+     * re-renders layers when it crosses a step, and pinch frames stay cheap.
+     */
+    private fun syncInteractiveScale(project: Project) {
+        val raw = scale.coerceIn(0f, 1f)
+        val step = (ceil(raw * 8f).toInt()).coerceIn(1, 8) / 8f
+        editor?.renderer?.setInteractiveScale(step)
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w != seenWidth || h != seenHeight) {
-            seenWidth = w
-            seenHeight = h
-            if (!userZoomed) fitToPaper() else clampOffsets()
-        }
+        viewport.onSizeChanged(w, h, oldw, oldh)
     }
 
     // ------------------------------------------------------------------ draw
@@ -243,9 +278,23 @@ class DrawingCanvasView @JvmOverloads constructor(
         super.onDraw(canvas)
         val model = editor ?: return
         val project = model.project
+        viewport.updateProject(project.width, project.height)
+        pendingViewport?.let { saved ->
+            if (width > 0 && height > 0) {
+                viewport.restore(saved)
+                pendingViewport = null
+            }
+        }
+        // Keep the interactive cache at roughly display resolution. Skip updates
+        // while a pinch or animated zoom is in flight so layers are not re-rendered
+        // on every frame; onDraw syncs again as soon as the gesture settles.
+        if (inker == null && mode != Mode.PINCH && viewport.animator?.isRunning != true) {
+            syncInteractiveScale(project)
+        }
         val frameIndex = if (previewFrameIndex >= 0) previewFrameIndex else model.currentFrame
         val frame = project.frameAt(frameIndex)
         val editing = previewFrameIndex < 0 && frameIndex == model.currentFrame
+        syncMorphSession(model)
 
         paperRect.set(
             offsetX,
@@ -284,11 +333,16 @@ class DrawingCanvasView @JvmOverloads constructor(
         }
 
         if (previewFrameIndex >= 0) {
-            val preview = model.renderer.composite(
-                project, frame, min(project.width, 900), transparent = false
+            // Playback frames are rasterised on a worker thread and only handed
+            // over when ready; the canvas never blocks the UI thread on vectors.
+            val width = min(project.width, 900)
+            val preview = model.renderer.playbackBitmap(
+                frameIndex, frame.id, frame.revision, width
             )
-            layerPaint.alpha = 255
-            canvas.drawBitmap(preview, null, bitmapRect, layerPaint)
+            if (preview != null) {
+                layerPaint.alpha = 255
+                canvas.drawBitmap(preview, null, bitmapRect, layerPaint)
+            }
         } else {
             val drawingOnActive = editing && inker != null
             val placingLayerId = model.placement?.targetLayerId
@@ -313,16 +367,35 @@ class DrawingCanvasView @JvmOverloads constructor(
                 val shiftLayer = shift?.takeIf {
                     it.frameIndex == frameIndex && it.layerId == layer.id
                 }
+                val morphLayer = model.morph?.takeIf {
+                    it.frameIndex == frameIndex && it.layerId == layer.id
+                }
+                val shiftMoved = shiftLayer != null &&
+                    (shiftLayer.dx != 0f || shiftLayer.dy != 0f ||
+                        shiftLayer.rotation != 0f)
+                if (shiftMoved) {
+                    // "Before" ghost at the untransformed position.
+                    layerPaint.alpha = (displayOpacity * 0.16f * 255f).toInt().coerceIn(0, 255)
+                    canvas.drawBitmap(bitmap, null, bitmapRect, layerPaint)
+                }
                 val layerSave = if (shiftLayer != null) canvas.save() else -1
-                if (shiftLayer != null) canvas.translate(shiftLayer.dx, shiftLayer.dy)
+                if (shiftLayer != null) {
+                    canvas.translate(shiftLayer.dx, shiftLayer.dy)
+                    if (shiftLayer.rotation != 0f) {
+                        canvas.rotate(shiftLayer.rotation, shiftLayer.pivotX, shiftLayer.pivotY)
+                    }
+                }
                 layerPaint.alpha = (displayOpacity * 255f).toInt().coerceIn(0, 255)
                 val erasingHere = drawingOnActive && i == activeLayerIndex &&
                     strokeTool == Tool.ERASER
-                if (erasingHere) {
+                val activeMorph = morphSession
+                if (morphLayer != null && activeMorph?.dirty != null) {
+                    drawMorphPreview(canvas, model, activeMorph, bitmap, displayOpacity)
+                } else if (erasingHere) {
                     // The erased view replaces the layer, it does not sit on top of it.
                     drawErasePreview(canvas, bitmap, displayOpacity)
                 } else {
-                    canvas.drawBitmap(bitmap, 0f, 0f, layerPaint)
+                    canvas.drawBitmap(bitmap, null, bitmapRect, layerPaint)
                 }
 
                 if (drawingOnActive && i == activeLayerIndex && !erasingHere) {
@@ -347,7 +420,12 @@ class DrawingCanvasView @JvmOverloads constructor(
         canvas.drawRoundRect(paperRect, radius, radius, borderPaint)
 
         if (model.eyedropper != null && eyedropperActive) drawEyedropperLoupe(canvas, model)
-        if (editing && hoverVisible && model.placement == null && model.eyedropper == null) {
+        if (editing && model.tool == Tool.MORPH && (morphPointer >= 0 || hoverVisible)) {
+            drawMorphRing(canvas, model)
+        }
+        if (editing && hoverVisible && model.placement == null &&
+            model.eyedropper == null && model.tool != Tool.MORPH
+        ) {
             drawCursor(canvas, model)
         }
     }
@@ -454,6 +532,10 @@ class DrawingCanvasView @JvmOverloads constructor(
             return true
         }
         if (model.isPlaying || previewFrameIndex >= 0) return true
+        if (model.tool == Tool.MORPH) {
+            handleMorphTouch(event, model)
+            return true
+        }
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> handleDown(event, model)
@@ -594,7 +676,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         panLastX = event.x
         panLastY = event.y
         suppressUntilUp = false
-        animator?.cancel()
+        viewport.cancelAnimation()
 
         val doubleTap = isTouch && !palmSized && isDoubleTap(event)
         if (doubleTap) {
@@ -670,7 +752,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         activePointerId = event.getPointerId(index)
         panLastX = event.getX(index)
         panLastY = event.getY(index)
-        animator?.cancel()
+        viewport.cancelAnimation()
         suppressUntilUp = false
         beginStroke(event, index, eraserOverride)
     }
@@ -686,12 +768,9 @@ class DrawingCanvasView @JvmOverloads constructor(
             Mode.PAN -> {
                 val index = event.findPointerIndex(activePointerId)
                 if (index < 0) return
-                offsetX += event.getX(index) - panLastX
-                offsetY += event.getY(index) - panLastY
+                viewport.panBy(event.getX(index) - panLastX, event.getY(index) - panLastY)
                 panLastX = event.getX(index)
                 panLastY = event.getY(index)
-                clampOffsets()
-                invalidate()
             }
             Mode.PINCH -> updatePinch(event)
             Mode.NONE -> Unit
@@ -708,12 +787,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         val minScale = max(0.02f, fitScale * 0.35f)
         val maxScale = max(2f, fitScale * 12f)
         val newScale = (pinchStartScale * (span / pinchStartSpan)).coerceIn(minScale, maxScale)
-        offsetX = focusX - pinchWorldX * newScale
-        offsetY = focusY - pinchWorldY * newScale
-        scale = newScale
-        userZoomed = true
-        clampOffsets()
-        invalidate()
+        viewport.zoomTo(newScale, focusX, focusY, pinchWorldX, pinchWorldY)
     }
 
     private fun handlePointerUp(event: MotionEvent) {
@@ -759,36 +833,9 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private fun handleDoubleTap(x: Float, y: Float) {
         val project = editor?.project ?: return
-        if (scale > fitScale * 1.15f) {
-            fitToPaper(animate = true)
-        } else {
-            val targetScale = (fitScale * 2.4f).coerceAtMost(max(2f, fitScale * 12f))
-            val wx = (x - offsetX) / scale
-            val wy = (y - offsetY) / scale
-            animateTo(targetScale, x - wx * targetScale, y - wy * targetScale)
-            userZoomed = true
-        }
+        viewport.updateProject(project.width, project.height)
+        viewport.toggleZoom(x, y)
         lastTapTime = 0L
-    }
-
-    private fun animateTo(targetScale: Float, targetX: Float, targetY: Float) {
-        animator?.cancel()
-        val startScale = scale
-        val startX = offsetX
-        val startY = offsetY
-        animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 280
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { animation ->
-                val t = animation.animatedValue as Float
-                scale = startScale + (targetScale - startScale) * t
-                offsetX = startX + (targetX - startX) * t
-                offsetY = startY + (targetY - startY) * t
-                clampOffsets()
-                invalidate()
-            }
-            start()
-        }
     }
 
     // --------------------------------------------------------------- strokes
@@ -812,6 +859,7 @@ class DrawingCanvasView @JvmOverloads constructor(
             return
         }
         val project = model.project
+        syncInteractiveScale(project)
         val layer = model.layer
         val activeTool = if (eraserOverride) Tool.ERASER else model.tool
         drawPointerToolType = event.getToolType(index)
@@ -821,6 +869,11 @@ class DrawingCanvasView @JvmOverloads constructor(
         activeLayerId = layer.id
         strokeFrameIndex = model.currentFrame
         activeBitmap = model.renderer.editableLayerBitmap(project, layer)
+        // Keep this layer cached until the stroke is committed. Building the
+        // bitmaps for other layers can otherwise evict the active one on large
+        // canvases with several layers, and finishStroke would draw into a
+        // recycled bitmap.
+        model.renderer.pinLayer(layer.id)
         inker = StrokeInker(
             tool = activeTool,
             color = model.color,
@@ -831,7 +884,12 @@ class DrawingCanvasView @JvmOverloads constructor(
         val scratch = model.renderer.inkOverlay(project)
         model.renderer.clearInkOverlay()
         overlayBitmap = scratch
-        overlayCanvas = Canvas(scratch)
+        overlayCanvas = Canvas(scratch).apply {
+            scale(
+                scratch.width.toFloat() / project.width,
+                scratch.height.toFloat() / project.height
+            )
+        }
         model.ensureLayerVisibleForInk()
         mode = Mode.DRAW
         addSample(event, index)
@@ -911,6 +969,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         if (added || history > 0) {
             val canvas = inkCanvas() ?: return
             active.drawNew(canvas)
+            updateStrokeBounds(active)
             invalidate()
         }
     }
@@ -924,7 +983,18 @@ class DrawingCanvasView @JvmOverloads constructor(
         )
         val canvas = inkCanvas() ?: return
         active.drawNew(canvas)
+        updateStrokeBounds(active)
         invalidate()
+    }
+
+    /**
+     * Keeps the eraser preview's isolated region in sync with the live stroke.
+     * Without this the preview clips the active layer to the previous stroke's
+     * bounds, which looks like whole layers vanishing while erasing.
+     */
+    private fun updateStrokeBounds(active: StrokeInker) {
+        active.bounds(strokeBounds)
+        strokeBounds.roundOut(strokeRect)
     }
 
     private fun pressureFor(tool: Tool, event: MotionEvent, index: Int, pressure: Float): Float {
@@ -937,28 +1007,37 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private fun finishStroke() {
         val active = inker ?: return
-        val bitmap = activeBitmap
         val model = editor
-        if (bitmap == null || model == null) {
+        if (model == null) {
             resetStroke()
             return
         }
+        val bitmap = activeBitmap?.takeUnless { it.isRecycled }
         val overlay = overlayBitmap
         val scratchCanvas = overlayCanvas
-        if (overlay != null && scratchCanvas != null) {
+        if (overlay != null && scratchCanvas != null && bitmap != null) {
             active.finish(scratchCanvas)
-            active.bounds(strokeBounds)
-            strokeBounds.roundOut(strokeRect)
-            // src == dst: copy just the stroke's rectangle of the scratch bitmap.
+            updateStrokeBounds(active)
+            // Both bitmaps are at the same interactive scale, so compositing the
+            // whole scratch bitmap is equivalent to the old stroke-rect copy.
             Canvas(bitmap).drawBitmap(
-                overlay, strokeRect, strokeRect, Ink.compositePaintFor(strokeTool, strokeOpacity)
+                overlay,
+                null,
+                android.graphics.Rect(0, 0, bitmap.width, bitmap.height),
+                Ink.compositePaintFor(strokeTool, strokeOpacity)
             )
             model.renderer.clearInkOverlay()
         }
         val stroke = active.snapshot()
         if (stroke.pointCount > 0 && strokeFrameIndex >= 0) {
             model.addStroke(stroke, strokeFrameIndex, activeLayerIndex)
-            model.renderer.noteStrokeCommitted(model.layer)
+            if (bitmap != null) {
+                model.renderer.noteStrokeCommitted(model.layer)
+            } else {
+                // The cache was dropped under us; re-render from vectors so the
+                // committed stroke appears instead of being recorded as cached.
+                model.renderer.invalidateLayer(activeLayerId)
+            }
         }
         resetStroke()
         invalidate()
@@ -989,7 +1068,7 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
 
     private fun drawPlacement(canvas: Canvas, placement: ReferencePlacement) {
-        val bitmap = ReferenceFiles.bitmap(placement.fileName)
+        val bitmap = editor?.let { ReferenceFiles.bitmap(it.project.id, placement.fileName) }
         val halfW = placement.width / 2f
         val halfH = placement.height / 2f
         canvas.save()
@@ -1035,19 +1114,518 @@ class DrawingCanvasView @JvmOverloads constructor(
                 shiftPointer = event.getPointerId(0)
                 shiftLastX = event.x
                 shiftLastY = event.y
+                clearShiftPinch()
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.pointerCount >= 2) beginShiftPinch(event, model)
             }
             MotionEvent.ACTION_MOVE -> {
-                val index = event.findPointerIndex(shiftPointer)
-                if (index < 0) return
-                val dx = (event.getX(index) - shiftLastX) / scale
-                val dy = (event.getY(index) - shiftLastY) / scale
-                shiftLastX = event.getX(index)
-                shiftLastY = event.getY(index)
-                model.updateLayerShift(dx, dy)
+                val shift = model.layerShift ?: return
+                val pinching = shiftPinchA >= 0 && shiftPinchB >= 0 &&
+                    event.findPointerIndex(shiftPinchA) >= 0 &&
+                    event.findPointerIndex(shiftPinchB) >= 0
+                if (pinching) {
+                    updateShiftPinch(event, model)
+                } else {
+                    val index = event.findPointerIndex(shiftPointer)
+                    if (index >= 0) {
+                        val dx = shift.dx + (event.getX(index) - shiftLastX) / scale
+                        val dy = shift.dy + (event.getY(index) - shiftLastY) / scale
+                        shiftLastX = event.getX(index)
+                        shiftLastY = event.getY(index)
+                        model.updateLayerShift(dx, dy)
+                        invalidate()
+                    }
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val lifted = event.getPointerId(event.actionIndex)
+                if (lifted == shiftPinchA || lifted == shiftPinchB) {
+                    clearShiftPinch()
+                    // Keep moving with whatever finger is still down.
+                    val remaining = (0 until event.pointerCount)
+                        .firstOrNull { event.getPointerId(it) != lifted }
+                    if (remaining != null) {
+                        shiftPointer = event.getPointerId(remaining)
+                        shiftLastX = event.getX(remaining)
+                        shiftLastY = event.getY(remaining)
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                shiftPointer = -1
+                clearShiftPinch()
+            }
+        }
+    }
+
+    /** Two fingers on a shifted layer rotate it around the layer's own centre. */
+    private fun beginShiftPinch(event: MotionEvent, model: EditorModel) {
+        val shift = model.layerShift ?: return
+        val a = 0
+        val b = 1
+        shiftPinchA = event.getPointerId(a)
+        shiftPinchB = event.getPointerId(b)
+        shiftBaseDx = shift.dx
+        shiftBaseDy = shift.dy
+        shiftBaseRotation = shift.rotation
+        shiftBaseAngle = angleOf(event, a, b)
+        shiftBaseMidX = (event.getX(a) + event.getX(b)) * 0.5f
+        shiftBaseMidY = (event.getY(a) + event.getY(b)) * 0.5f
+        shiftPointer = -1
+    }
+
+    private fun updateShiftPinch(event: MotionEvent, model: EditorModel) {
+        val a = event.findPointerIndex(shiftPinchA)
+        val b = event.findPointerIndex(shiftPinchB)
+        if (a < 0 || b < 0) return
+        val delta = Math.toDegrees(
+            (angleOf(event, a, b) - shiftBaseAngle).toDouble()
+        ).toFloat()
+        var rotation = normalizeAngle(shiftBaseRotation + delta)
+        val snapped = (rotation / 45f).roundToInt() * 45f
+        if (abs(rotation - snapped) < 3.5f) rotation = normalizeAngle(snapped)
+        val midX = (event.getX(a) + event.getX(b)) * 0.5f
+        val midY = (event.getY(a) + event.getY(b)) * 0.5f
+        model.updateLayerShift(
+            dx = shiftBaseDx + (midX - shiftBaseMidX) / scale,
+            dy = shiftBaseDy + (midY - shiftBaseMidY) / scale,
+            rotation = rotation
+        )
+        invalidate()
+    }
+
+    private fun clearShiftPinch() {
+        shiftPinchA = -1
+        shiftPinchB = -1
+    }
+
+    private fun angleOf(event: MotionEvent, a: Int, b: Int): Float = atan2(
+        (event.getY(b) - event.getY(a)).toDouble(),
+        (event.getX(b) - event.getX(a)).toDouble()
+    ).toFloat()
+
+    // ------------------------------------------------------------------ morph
+
+    /**
+     * Interactive vector warp. Dragging pulls the ink under the brush with a soft
+     * falloff; the model is only touched when the user confirms with Done, so a
+     * whole sculpting session is one undoable edit and Cancel changes nothing.
+     */
+    /**
+     * Morph is a normal tool. A stylus drag sculpts the selected layer and is
+     * committed as one undoable edit when it lifts; fingers navigate exactly like
+     * they do for the ink tools, so a pinch can never smear ink.
+     */
+    private fun handleMorphTouch(event: MotionEvent, model: EditorModel) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val index = 0
+                val isTouch = event.getToolType(index) == MotionEvent.TOOL_TYPE_FINGER
+                val palmSized = isPalm(event, index)
+                viewport.cancelAnimation()
+                clearMorphNavigation()
+                suppressUntilUp = false
+                activePointerId = event.getPointerId(index)
+                panLastX = event.x
+                panLastY = event.y
+
+                val doubleTap = isTouch && !palmSized && isDoubleTap(event)
+                if (doubleTap) {
+                    handleDoubleTap(event.x, event.y)
+                    lastTapTime = 0L
+                    suppressUntilUp = true
+                    invalidate()
+                    return
+                }
+                if (isTouch && !palmSized) {
+                    lastTapTime = System.currentTimeMillis()
+                    lastTapX = event.x
+                    lastTapY = event.y
+                }
+                if (!isPen(event, index) && (model.stylusOnly || palmSized)) {
+                    // Fingers navigate; palms are ignored entirely.
+                    if (!palmSized) morphPanning = true
+                    return
+                }
+                if (!model.beginMorph()) return
+                beginMorphSession(model)
+                morphPointer = event.getPointerId(index)
+                morphLastX = event.x
+                morphLastY = event.y
+                morphAtX = event.x
+                morphAtY = event.y
                 invalidate()
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> shiftPointer = -1
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (suppressUntilUp) return
+                val activeIndex = event.findPointerIndex(activePointerId)
+                val warpFromPen = activeIndex >= 0 && isPen(event, activeIndex)
+                if (event.pointerCount < 2) return
+                // Palms and spare fingers arriving while the pen sculpts are ignored.
+                if (model.morph != null && warpFromPen) return
+                // A second finger navigates: abandon the warp in progress so a
+                // pinch never smears ink, exactly like an ink stroke.
+                if (model.morph != null) {
+                    model.cancelMorph()
+                    endMorphSession()
+                }
+                val a = 0
+                val b = 1
+                pinchPointerA = event.getPointerId(a)
+                pinchPointerB = event.getPointerId(b)
+                pinchStartSpan = spanOf(event, a, b).coerceAtLeast(1f)
+                pinchStartScale = scale
+                pinchFocusX = (event.getX(a) + event.getX(b)) * 0.5f
+                pinchFocusY = (event.getY(a) + event.getY(b)) * 0.5f
+                pinchWorldX = (pinchFocusX - offsetX) / scale
+                pinchWorldY = (pinchFocusY - offsetY) / scale
+                morphPanning = false
+                morphPinching = true
+                invalidate()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (morphPinching) {
+                    updatePinch(event)
+                    return
+                }
+                if (morphPanning) {
+                    val index = event.findPointerIndex(activePointerId)
+                    if (index < 0) return
+                    viewport.panBy(event.getX(index) - panLastX, event.getY(index) - panLastY)
+                    panLastX = event.getX(index)
+                    panLastY = event.getY(index)
+                    return
+                }
+                val session = morphSession ?: return
+                if (morphPointer < 0) return
+                val index = event.findPointerIndex(morphPointer)
+                if (index < 0) return
+                val x = event.getX(index)
+                val y = event.getY(index)
+                morphAtX = x
+                morphAtY = y
+                val dx = (x - morphLastX) / scale
+                val dy = (y - morphLastY) / scale
+                if (abs(dx) > 0.001f || abs(dy) > 0.001f) {
+                    warpAlong(model, session, morphLastX, morphLastY, x, y, dx, dy)
+                    morphLastX = x
+                    morphLastY = y
+                    invalidate()
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (morphPinching) {
+                    val lifted = event.getPointerId(event.actionIndex)
+                    if (lifted == pinchPointerA || lifted == pinchPointerB) {
+                        clearMorphPinch()
+                        // Do not resume sculpting with the leftover finger; lift
+                        // and put the stylus down again, like the ink tools.
+                        morphPointer = -1
+                    }
+                    return
+                }
+                if (event.getPointerId(event.actionIndex) == morphPointer) morphPointer = -1
+            }
+            MotionEvent.ACTION_UP -> {
+                if (suppressUntilUp) {
+                    suppressUntilUp = false
+                    morphPointer = -1
+                    return
+                }
+                val wasWarping = model.morph != null
+                clearMorphNavigation()
+                morphPointer = -1
+                if (wasWarping) commitMorph() else endMorphSession()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                clearMorphNavigation()
+                morphPointer = -1
+                cancelMorph()
+            }
         }
+    }
+
+    private fun clearMorphPinch() {
+        pinchPointerA = -1
+        pinchPointerB = -1
+        morphPinching = false
+    }
+
+    private fun clearMorphNavigation() {
+        clearMorphPinch()
+        morphPanning = false
+    }
+
+    private fun beginMorphSession(model: EditorModel) {
+        val state = model.morph ?: return
+        if (morphSession?.layerId == state.layerId) return
+        endMorphSession()
+        val frame = model.project.frameAt(state.frameIndex)
+        val layer = frame.layers.firstOrNull { it.id == state.layerId } ?: return
+        morphSession = MorphSession(
+            frameIndex = state.frameIndex,
+            layerId = layer.id,
+            source = layer.strokes.toList(),
+            points = Array(layer.strokes.size) { layer.strokes[it].points.copyOf() },
+            changed = BooleanArray(layer.strokes.size),
+            originalBounds = Array(layer.strokes.size) {
+                boundsOf(layer.strokes[it].points, layer.strokes[it].width)
+            }
+        )
+    }
+
+    private fun syncMorphSession(model: EditorModel) {
+        if (model.morph == null && morphSession != null) endMorphSession()
+    }
+
+    private fun endMorphSession() {
+        morphSession?.recycle()
+        morphSession = null
+        morphPointer = -1
+    }
+
+    private fun warpAlong(
+        model: EditorModel,
+        session: MorphSession,
+        fromX: Float,
+        fromY: Float,
+        toX: Float,
+        toY: Float,
+        dx: Float,
+        dy: Float
+    ) {
+        val radius = model.morph?.radius ?: return
+        val travel = hypot((toX - fromX) / scale, (toY - fromY) / scale)
+        val steps = (travel / (radius * 0.3f)).toInt().coerceIn(1, 24)
+        val stepDx = dx / steps
+        val stepDy = dy / steps
+        val stepLength = hypot(stepDx, stepDy)
+        val movedStrokes = HashSet<Int>()
+        for (step in 1..steps) {
+            val f = step.toFloat() / steps
+            val cx = toProjectX(fromX + (toX - fromX) * f)
+            val cy = toProjectY(fromY + (toY - fromY) * f)
+            for (i in session.points.indices) {
+                if (Warp.apply(session.points[i], cx, cy, stepDx, stepDy, radius)) {
+                    session.changed[i] = true
+                    movedStrokes.add(i)
+                }
+            }
+            addMorphDirty(model, session, cx, cy, radius + stepLength)
+        }
+        // A moved point stretches the segments that connect it to unmoved
+        // neighbours, which can reach far outside the brush. Re-render those whole
+        // strokes so the patch never leaves a stale piece of the old shape behind.
+        for (i in movedStrokes) {
+            addMorphDirty(model, session, session.originalBounds[i])
+            addMorphDirty(model, session, boundsOf(session.points[i], session.source[i].width))
+        }
+        session.revision++
+    }
+
+    private fun addMorphDirty(
+        model: EditorModel,
+        session: MorphSession,
+        cx: Float,
+        cy: Float,
+        radius: Float
+    ) {
+        val project = model.project
+        val left = (cx - radius).coerceIn(0f, project.width.toFloat())
+        val top = (cy - radius).coerceIn(0f, project.height.toFloat())
+        val right = (cx + radius).coerceIn(0f, project.width.toFloat())
+        val bottom = (cy + radius).coerceIn(0f, project.height.toFloat())
+        if (right <= left || bottom <= top) return
+        val rect = RectF(left, top, right, bottom)
+        val dirty = session.dirty
+        if (dirty == null) {
+            session.dirty = rect
+        } else {
+            dirty.union(rect)
+        }
+    }
+
+    private fun addMorphDirty(model: EditorModel, session: MorphSession, rect: RectF) {
+        val project = model.project
+        val clamped = RectF(
+            rect.left.coerceIn(0f, project.width.toFloat()),
+            rect.top.coerceIn(0f, project.height.toFloat()),
+            rect.right.coerceIn(0f, project.width.toFloat()),
+            rect.bottom.coerceIn(0f, project.height.toFloat())
+        )
+        if (clamped.right <= clamped.left || clamped.bottom <= clamped.top) return
+        val dirty = session.dirty
+        if (dirty == null) {
+            session.dirty = clamped
+        } else {
+            dirty.union(clamped)
+        }
+    }
+
+    private fun boundsOf(points: FloatArray, width: Float): RectF {
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        var i = 0
+        while (i < points.size) {
+            val x = points[i]
+            val y = points[i + 1]
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+            i += 3
+        }
+        if (minX == Float.MAX_VALUE) return RectF()
+        val pad = width + 2f
+        return RectF(minX - pad, minY - pad, maxX + pad, maxY + pad)
+    }
+
+    /** Commits the sculpted points to the model. */
+    fun commitMorph() {
+        val model = editor ?: return
+        val session = morphSession
+        val dirty = session?.dirty
+        if (session != null && dirty != null) {
+            val strokes = session.source.mapIndexed { i, stroke ->
+                if (session.changed[i]) {
+                    Stroke(stroke.tool, stroke.color, stroke.width, stroke.opacity, session.points[i])
+                } else {
+                    stroke
+                }
+            }
+            model.commitMorph(strokes)
+        } else {
+            model.cancelMorph()
+        }
+        endMorphSession()
+        invalidate()
+    }
+
+    fun cancelMorph() {
+        editor?.cancelMorph()
+        endMorphSession()
+        invalidate()
+    }
+
+    /**
+     * Draws the morphing layer: a faint ghost of the original ink, the untouched
+     * part of the cached layer, and a locally re-rendered patch for the warped
+     * area. Only nearby strokes are re-rasterised while dragging.
+     */
+    private fun drawMorphPreview(
+        canvas: Canvas,
+        model: EditorModel,
+        session: MorphSession,
+        base: Bitmap,
+        layerOpacity: Float
+    ) {
+        val dirty = session.dirty ?: return
+        layerPaint.alpha = (layerOpacity * 0.16f * 255f).toInt().coerceIn(0, 255)
+        canvas.drawBitmap(base, null, bitmapRect, layerPaint)
+
+        val project = model.project
+        val save = canvas.save()
+        canvas.clipRect(0f, 0f, project.width.toFloat(), project.height.toFloat())
+        canvas.clipOutRect(dirty)
+        layerPaint.alpha = (layerOpacity * 255f).toInt().coerceIn(0, 255)
+        canvas.drawBitmap(base, null, bitmapRect, layerPaint)
+        canvas.restoreToCount(save)
+
+        val patch = morphPatch(model, session) ?: return
+        layerPaint.alpha = (layerOpacity * 255f).toInt().coerceIn(0, 255)
+        patchRect.set(
+            session.patchLeft.toFloat(),
+            session.patchTop.toFloat(),
+            (session.patchLeft + patch.width).toFloat(),
+            (session.patchTop + patch.height).toFloat()
+        )
+        canvas.drawBitmap(patch, null, patchRect, layerPaint)
+        layerPaint.alpha = 255
+    }
+
+    private fun morphPatch(model: EditorModel, session: MorphSession): Bitmap? {
+        val dirty = session.dirty ?: return null
+        val project = model.project
+        val left = floor(dirty.left).toInt().coerceIn(0, project.width - 1)
+        val top = floor(dirty.top).toInt().coerceIn(0, project.height - 1)
+        val right = ceil(dirty.right).toInt().coerceIn(left + 1, project.width)
+        val bottom = ceil(dirty.bottom).toInt().coerceIn(top + 1, project.height)
+        val width = right - left
+        val height = bottom - top
+        var patch = session.patch
+        val resized = patch == null || patch.width != width || patch.height != height
+        if (resized) {
+            patch?.recycle()
+            patch = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            session.patch = patch
+        }
+        val stale = resized || session.patchRevision != session.revision ||
+            session.patchLeft != left || session.patchTop != top
+        if (!stale) return patch
+        patch.eraseColor(Color.TRANSPARENT)
+        val patchCanvas = Canvas(patch)
+        patchCanvas.translate(-left.toFloat(), -top.toFloat())
+        for (i in session.points.indices) {
+            if (!strokeTouchesRect(session.points[i], session.source[i].width, left, top, right, bottom)) {
+                continue
+            }
+            val stroke = session.source[i]
+            Ink.renderStroke(
+                patchCanvas,
+                Stroke(stroke.tool, stroke.color, stroke.width, stroke.opacity, session.points[i])
+            )
+        }
+        session.patchRevision = session.revision
+        session.patchLeft = left
+        session.patchTop = top
+        return patch
+    }
+
+    private fun strokeTouchesRect(
+        points: FloatArray,
+        width: Float,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int
+    ): Boolean {
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        var i = 0
+        while (i < points.size) {
+            val x = points[i]
+            val y = points[i + 1]
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+            i += 3
+        }
+        if (minX == Float.MAX_VALUE) return false
+        val pad = width + 2f
+        return maxX + pad >= left && minX - pad <= right &&
+            maxY + pad >= top && minY - pad <= bottom
+    }
+
+    private fun drawMorphRing(canvas: Canvas, model: EditorModel) {
+        val x = if (morphPointer >= 0) morphAtX else hoverX
+        val y = if (morphPointer >= 0) morphAtY else hoverY
+        val radius = (model.morph?.radius ?: model.size) * scale
+        if (radius < dp(2f)) return
+        cursorPaint.style = Paint.Style.STROKE
+        cursorPaint.strokeWidth = dp(1.3f)
+        cursorPaint.color = Color.argb(210, 10, 132, 255)
+        canvas.drawCircle(x, y, radius, cursorPaint)
+        cursorPaint.strokeWidth = dp(0.8f)
+        cursorPaint.color = Color.argb(90, 0, 0, 0)
+        canvas.drawCircle(x, y, radius + dp(1.1f), cursorPaint)
+        cursorFill.color = Color.argb(210, 10, 132, 255)
+        canvas.drawCircle(x, y, dp(2.2f), cursorFill)
     }
 
     private fun handlePlacementTouch(event: MotionEvent, model: EditorModel) {
@@ -1189,7 +1767,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         val overlay = overlayBitmap ?: return
         // The overlay will end up inside the layer, so it carries the layer's own alpha.
         layerPaint.alpha = (strokeOpacity * layerOpacity * 255f).toInt().coerceIn(0, 255)
-        canvas.drawBitmap(overlay, 0f, 0f, layerPaint)
+        canvas.drawBitmap(overlay, null, bitmapRect, layerPaint)
         layerPaint.alpha = 255
     }
 
@@ -1201,27 +1779,38 @@ class DrawingCanvasView @JvmOverloads constructor(
      */
     private fun drawErasePreview(canvas: Canvas, layerBitmap: Bitmap, layerOpacity: Float) {
         val overlay = overlayBitmap ?: return
+        val alpha = (layerOpacity * 255f).toInt().coerceIn(0, 255)
+        val left = strokeRect.left.toFloat()
+        val top = strokeRect.top.toFloat()
+        val right = strokeRect.right.toFloat()
+        val bottom = strokeRect.bottom.toFloat()
+
+        // The layer outside the live eraser region is unchanged: draw it exactly
+        // once, so erasing a lower layer cannot hide the rest of that layer.
+        val outside = canvas.save()
+        canvas.clipRect(0f, 0f, bitmapRect.width(), bitmapRect.height())
+        canvas.clipOutRect(left, top, right, bottom)
+        layerPaint.alpha = alpha
+        canvas.drawBitmap(layerBitmap, null, bitmapRect, layerPaint)
+        canvas.restoreToCount(outside)
+
+        // Only the eraser's bounding box needs the isolated DST_OUT cut-out.
         val save = canvas.save()
-        canvas.clipRect(strokeBounds)
-        canvas.saveLayer(
-            strokeBounds.left, strokeBounds.top,
-            strokeBounds.right, strokeBounds.bottom,
-            null
-        )
-        layerPaint.alpha = (layerOpacity * 255f).toInt().coerceIn(0, 255)
-        canvas.drawBitmap(layerBitmap, 0f, 0f, layerPaint)
+        canvas.clipRect(left, top, right, bottom)
+        canvas.saveLayer(left, top, right, bottom, null)
+        layerPaint.alpha = alpha
+        canvas.drawBitmap(layerBitmap, null, bitmapRect, layerPaint)
         layerPaint.alpha = 255
         overlayCompositePaint.alpha = 255
         overlayCompositePaint.xfermode =
             android.graphics.PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-        val rect = strokeRect
-        strokeBounds.roundOut(rect)
-        canvas.drawBitmap(overlay, rect, rect, overlayCompositePaint)
+        canvas.drawBitmap(overlay, null, bitmapRect, overlayCompositePaint)
         overlayCompositePaint.xfermode = null
         canvas.restoreToCount(save)
     }
 
     private fun resetStroke() {
+        editor?.renderer?.unpinLayer(activeLayerId)
         inker = null
         activeBitmap = null
         overlayBitmap = null
@@ -1233,27 +1822,17 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     // ------------------------------------------------------------------ misc
 
+    private fun persistViewport(model: EditorModel?) {
+        if (model == null) return
+        if (viewport.projectWidth <= 1 && viewport.projectHeight <= 1) return
+        model.storeViewportState(CanvasViewportCodec.encode(viewport.snapshot()))
+    }
+
     private fun toProjectX(x: Float): Float = (x - offsetX) / scale
     private fun toProjectY(y: Float): Float = (y - offsetY) / scale
 
     private fun spanOf(event: MotionEvent, a: Int, b: Int): Float =
         hypot(event.getX(a) - event.getX(b), event.getY(a) - event.getY(b))
-
-    private fun clampOffsets() {
-        val project = editor?.project ?: return
-        val paperW = project.width * scale
-        val paperH = project.height * scale
-        val marginX = min(dp(72f), paperW * 0.8f)
-        val marginY = min(dp(72f), paperH * 0.8f)
-        offsetX = offsetX.coerceIn(-paperW + marginX, width - marginX)
-        offsetY = offsetY.coerceIn(-paperH + marginY, height - marginY)
-        if (paperW < width) {
-            offsetX = (width - paperW) / 2f
-        }
-        if (paperH < height) {
-            offsetY = (height - paperH) / 2f
-        }
-    }
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -1275,8 +1854,45 @@ class DrawingCanvasView @JvmOverloads constructor(
         return super.onHoverEvent(event)
     }
 
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        if (visibility != VISIBLE) persistViewport(editor)
+        super.onWindowVisibilityChanged(visibility)
+    }
+
     override fun onDetachedFromWindow() {
-        animator?.cancel()
+        // Never leave a layer pinned (and its stroke half-applied) if the view is
+        // detached before the pen lifts.
+        cancelActiveStroke()
+        persistViewport(editor)
+        viewport.cancelAnimation()
+        morphSession?.recycle()
+        morphSession = null
         super.onDetachedFromWindow()
+    }
+}
+
+/**
+ * Working copy of the active layer while the morph tool sculpts it. Point arrays
+ * are mutated in place and a small patch bitmap is re-rendered under the brush,
+ * so the full layer bitmap never has to be rebuilt for every motion event.
+ */
+private class MorphSession(
+    val frameIndex: Int,
+    val layerId: Long,
+    val source: List<Stroke>,
+    val points: Array<FloatArray>,
+    val changed: BooleanArray,
+    val originalBounds: Array<RectF>
+) {
+    var dirty: RectF? = null
+    var revision = 0
+    var patch: Bitmap? = null
+    var patchRevision = -1
+    var patchLeft = 0
+    var patchTop = 0
+
+    fun recycle() {
+        patch?.recycle()
+        patch = null
     }
 }

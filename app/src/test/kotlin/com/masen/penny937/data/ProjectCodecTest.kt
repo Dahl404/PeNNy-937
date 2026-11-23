@@ -108,7 +108,8 @@ class ProjectCodecTest {
             centerY = 960f,
             width = 800f,
             height = 600f,
-            rotation = 12.5f
+            rotation = 12.5f,
+            inOutput = true
         )
         project = ProjectOps.addReferenceLayer(
             project, 0,
@@ -125,9 +126,36 @@ class ProjectCodecTest {
         assertEquals(1200, layers[0].image!!.sourceWidth)
         assertEquals(800f, layers[0].image!!.width, 0.001f)
         assertEquals(12.5f, layers[0].image!!.rotation, 0.001f)
+        assertEquals(true, layers[0].image!!.inOutput)
         assertTrue(layers[2].locked)
         assertEquals(null, layers[1].image)
         assertEquals(null, layers[2].image)
+    }
+
+    @Test
+    fun roundTripsFlattenedRasterInk() {
+        var project = ProjectFactory.create("Merge", 640, 480, 12, 0xFFFFFFFF.toInt())
+        val image = LayerImage(
+            file = "merged-1.png",
+            sourceWidth = 640,
+            sourceHeight = 480,
+            centerX = 320f,
+            centerY = 240f,
+            width = 640f,
+            height = 480f,
+            inOutput = true
+        )
+        project = ProjectOps.updateLayer(project, 0, 0) {
+            it.copy(image = image, flattened = true)
+        }
+
+        val bytes = ByteArrayOutputStream().also { ProjectCodec.write(project, it) }.toByteArray()
+        val loaded = ProjectCodec.read(ByteArrayInputStream(bytes))!!
+        val layer = loaded.frames[0].layers[0]
+        assertEquals(true, layer.flattened)
+        assertEquals(false, layer.isReference)
+        assertEquals("merged-1.png", layer.image!!.file)
+        assertEquals(image, layer.image)
     }
 
     @Test
@@ -182,6 +210,47 @@ class ProjectCodecTest {
         assertEquals(false, loaded.frames[0].layers[0].locked)
         assertEquals(null, loaded.frames[0].layers[0].image)
         assertNotNull(ProjectCodec.readMeta(ByteArrayInputStream(bytes.toByteArray())))
+    }
+
+    @Test
+    fun readsVersionTwoReferencesAsGuideOnly() {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(BufferedOutputStream(bytes)).use { out ->
+            out.writeInt(ProjectCodec.MAGIC)
+            out.writeInt(2)
+            out.writeLong(42L)
+            out.writeLong(1L)
+            out.writeLong(2L)
+            out.writeUTF("Old refs")
+            out.writeInt(640)
+            out.writeInt(480)
+            out.writeInt(8)
+            out.writeInt(0xFFFFFFFF.toInt())
+            out.writeInt(1) // frames
+            out.writeLong(100L)
+            out.writeInt(1) // hold
+            out.writeInt(1) // layers
+            out.writeLong(200L)
+            out.writeUTF("Reference")
+            out.writeBoolean(true)
+            out.writeFloat(1f)
+            out.writeBoolean(true) // locked
+            out.writeBoolean(true) // has image
+            out.writeUTF("ref-old.png")
+            out.writeInt(640)
+            out.writeInt(480)
+            out.writeFloat(320f)
+            out.writeFloat(240f)
+            out.writeFloat(640f)
+            out.writeFloat(480f)
+            out.writeFloat(0f)
+            out.writeInt(0) // strokes
+        }
+
+        val loaded = ProjectCodec.read(ByteArrayInputStream(bytes.toByteArray()))!!
+        val image = loaded.frames[0].layers[0].image!!
+        assertEquals("ref-old.png", image.file)
+        assertEquals(false, image.inOutput)
     }
 
     @Test

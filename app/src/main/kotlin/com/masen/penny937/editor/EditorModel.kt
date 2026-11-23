@@ -11,29 +11,30 @@ import com.masen.penny937.data.ExtractedVideo
 import com.masen.penny937.data.ReferenceFiles
 import com.masen.penny937.data.VideoReferenceExtractor
 import com.masen.penny937.export.ExportFormat
-import com.masen.penny937.export.Exporter
 import com.masen.penny937.model.Project
 import com.masen.penny937.model.ProjectOps
 import com.masen.penny937.model.GridStyle
+import com.masen.penny937.model.Frame
 import com.masen.penny937.model.Ids
 import com.masen.penny937.model.Layer
 import com.masen.penny937.model.LayerImage
 import com.masen.penny937.model.ShapeKind
 import com.masen.penny937.model.Stroke
 import com.masen.penny937.model.Tool
+import com.masen.penny937.paint.FrameRasterizer
 import com.masen.penny937.paint.FrameRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 data class ReferencePlacement(
     val fileName: String,
@@ -45,17 +46,28 @@ data class ReferencePlacement(
     val centerY: Float,
     val width: Float,
     val height: Float,
-    val rotation: Float = 0f
+    val rotation: Float = 0f,
+    val inOutput: Boolean = false
 ) {
     val isNew: Boolean get() = targetLayerId == null
 }
+
+/** A live, uncommitted warp of one layer's ink. */
+data class MorphState(
+    val frameIndex: Int,
+    val layerId: Long,
+    val radius: Float
+)
 
 /** A live, uncommitted translation of one layer's contents. */
 data class LayerShiftState(
     val frameIndex: Int,
     val layerId: Long,
     val dx: Float = 0f,
-    val dy: Float = 0f
+    val dy: Float = 0f,
+    val rotation: Float = 0f,
+    val pivotX: Float = 0f,
+    val pivotY: Float = 0f
 )
 
 data class EditorHint(val id: Int, val text: String)
@@ -72,13 +84,6 @@ data class VideoImportState(
     val total: Int,
     val preparing: Boolean = false
 )
-
-sealed interface ExportState {
-    data object Idle : ExportState
-    data class Running(val progress: Float) : ExportState
-    data class Done(val file: File, val mime: String) : ExportState
-    data class Failed(val message: String) : ExportState
-}
 
 class EditorModel(
     private val context: Context,
@@ -99,6 +104,8 @@ class EditorModel(
     var tool by mutableStateOf(prefs.lastTool)
         private set
     var color by mutableStateOf(prefs.lastColor)
+    var customSwatches by mutableStateOf(prefs.customSwatches())
+        private set
     var size by mutableStateOf(prefs.sizeFor(prefs.lastTool))
         private set
     var markerOpacity by mutableStateOf(prefs.opacityFor(Tool.MARKER))
@@ -119,7 +126,12 @@ class EditorModel(
         private set
     var layerShift by mutableStateOf<LayerShiftState?>(null)
         private set
+    var morph by mutableStateOf<MorphState?>(null)
+        private set
     var importingReference by mutableStateOf(false)
+        private set
+    /** Default for the next imported reference: true draws it in exports. */
+    var referenceInOutput by mutableStateOf(false)
         private set
     var eyedropper by mutableStateOf<EyedropperState?>(null)
         private set
@@ -129,28 +141,51 @@ class EditorModel(
         private set
     private var hintCounter = 0
     private var videoImportJob: Job? = null
+    private var pendingVideoFiles: Set<String> = emptySet()
     private var lastVideoStart: Int? = null
     private var lastVideoEnd: Int? = null
 
     var showGestureHint by mutableStateOf(!prefs.hintSeen)
         private set
 
-    var isPlaying by mutableStateOf(false)
-        private set
-    var previewFrame by mutableStateOf(0)
-        private set
 
     var canUndo by mutableStateOf(false)
         private set
     var canRedo by mutableStateOf(false)
         private set
-    var lastSavedAt by mutableStateOf(0L)
-        private set
 
-    var exportState by mutableStateOf<ExportState>(ExportState.Idle)
-        private set
 
     val renderer = FrameRenderer()
+
+    private val playbackController = PlaybackController(
+        scope = scope,
+        renderer = renderer,
+        project = { project },
+        currentFrame = { currentFrame }
+    )
+
+    val isPlaying: Boolean get() = playbackController.isPlaying
+    val previewFrame: Int get() = playbackController.previewFrame
+
+    private val saveController = SaveController(
+        scope = scope,
+        store = store,
+        project = { project },
+        currentFrame = { currentFrame }
+    )
+
+    val lastSavedAt: Long get() = saveController.lastSavedAt
+    val saving: Boolean get() = saveController.saving
+    val saveError: String? get() = saveController.saveError
+
+    private val exportController = ExportController(
+        scope = scope,
+        context = context,
+        project = { project },
+        currentFrame = { currentFrame }
+    )
+
+    val exportState: ExportState get() = exportController.state
 
     /**
      * Everything the drawing view reads from the model. Reading this in a
@@ -190,6 +225,8 @@ class EditorModel(
             h = h * 31 + previewFrame
             h = h * 31 + (placement?.hashCode() ?: 0)
             h = h * 31 + (if (eyedropper != null) 1 else 0)
+            h = h * 31 + (if (morph != null) 1 else 0)
+            h = h * 31 + ((morph?.radius ?: 0f).toBits())
             return h
         }
 
@@ -205,10 +242,6 @@ class EditorModel(
 
     private val undoStack = ArrayDeque<Snapshot>()
     private val redoStack = ArrayDeque<Snapshot>()
-    private var saveJob: Job? = null
-    private var exportJob: Job? = null
-    private var disposed = false
-    private val saveMutex = Mutex()
     private var lastOpacityUndoAt = 0L
 
     init {
@@ -269,6 +302,7 @@ class EditorModel(
     fun undo() {
         cancelActiveInk()
         cancelLayerShift()
+        cancelMorph()
         clearVideoRange()
         renderer.invalidateComposites()
         val snap = undoStack.removeLastOrNull() ?: return
@@ -282,6 +316,7 @@ class EditorModel(
     fun redo() {
         cancelActiveInk()
         cancelLayerShift()
+        cancelMorph()
         clearVideoRange()
         renderer.invalidateComposites()
         val snap = redoStack.removeLastOrNull() ?: return
@@ -343,7 +378,7 @@ class EditorModel(
         importingReference = true
         scope.launch {
             val imported = withContext(Dispatchers.IO) {
-                ReferenceFiles.import(context, uri)
+                ReferenceFiles.import(context, project.id, uri)
             }
             importingReference = false
             if (imported == null) {
@@ -372,9 +407,19 @@ class EditorModel(
                 centerY = p.height / 2f,
                 width = w,
                 height = h,
-                rotation = 0f
+                rotation = 0f,
+                inOutput = referenceInOutput
             )
         }
+    }
+
+    fun setReferenceOutputDefault(enabled: Boolean) {
+        referenceInOutput = enabled
+    }
+
+    fun setPlacementOutput(enabled: Boolean) {
+        val current = placement ?: return
+        placement = current.copy(inOutput = enabled)
     }
 
     fun beginReposition(layer: Layer) {
@@ -393,7 +438,8 @@ class EditorModel(
             centerY = image.centerY,
             width = image.width,
             height = image.height,
-            rotation = image.rotation
+            rotation = image.rotation,
+            inOutput = image.inOutput
         )
     }
 
@@ -427,7 +473,8 @@ class EditorModel(
             centerY = current.centerY,
             width = current.width,
             height = current.height,
-            rotation = current.rotation
+            rotation = current.rotation,
+            inOutput = current.inOutput
         )
         val existingId = current.targetLayerId
         if (existingId == null) {
@@ -477,6 +524,7 @@ class EditorModel(
             try {
                 val extracted: ExtractedVideo = VideoReferenceExtractor.extract(
                     context = context,
+                    projectId = project.id,
                     uri = uri,
                     targetFps = targetFps,
                     onTotal = { total ->
@@ -490,6 +538,8 @@ class EditorModel(
                         }
                     }
                 )
+                pendingVideoFiles = extracted.frames.mapTo(LinkedHashSet()) { it.file }
+                val outputReference = referenceInOutput
                 val current = project
                 val first = extracted.frames.firstOrNull()
                     ?: throw IllegalStateException("No video frames were extracted")
@@ -510,7 +560,8 @@ class EditorModel(
                         centerY = centerY,
                         width = displayWidth,
                         height = displayHeight,
-                        rotation = 0f
+                        rotation = 0f,
+                        inOutput = outputReference
                     )
                 }
                 val insertion = ProjectOps.insertVideoReferenceFrames(
@@ -522,15 +573,18 @@ class EditorModel(
                 lastVideoStart = insertion.startFrame
                 lastVideoEnd = insertion.endFrame
                 videoImport = null
+                pendingVideoFiles = emptySet()
                 apply(insertion.project, insertion.startFrame, insertion.selectedLayer)
                 showHint(
                     "Video reference · ${images.size} frames " +
                         "(${insertion.startFrame + 1}–${insertion.endFrame + 1})"
                 )
             } catch (c: kotlinx.coroutines.CancellationException) {
+                deletePendingVideoFiles()
                 videoImport = null
                 throw c
             } catch (t: Throwable) {
+                deletePendingVideoFiles()
                 videoImport = null
                 showHint(t.message ?: "Could not import that video")
             }
@@ -541,11 +595,18 @@ class EditorModel(
         videoImportJob?.cancel()
         videoImportJob = null
         videoImport = null
+        deletePendingVideoFiles()
+    }
+
+    private fun deletePendingVideoFiles() {
+        val files = pendingVideoFiles
+        pendingVideoFiles = emptySet()
+        files.forEach { ReferenceFiles.delete(project.id, it) }
     }
 
     fun cancelPlacement() {
         val current = placement ?: return
-        if (current.isNew) ReferenceFiles.delete(current.fileName)
+        if (current.isNew) ReferenceFiles.delete(project.id, current.fileName)
         placement = null
     }
 
@@ -558,6 +619,7 @@ class EditorModel(
      */
     fun beginLayerShift() {
         if (placement != null || importingReference || videoImport != null) return
+        cancelMorph()
         if (eyedropper != null) cancelEyedropper()
         val target = layer
         if (target.locked) {
@@ -570,31 +632,89 @@ class EditorModel(
         }
         cancelActiveInk()
         if (isPlaying) stopPlayback()
+        val pivot = layerPivot(target)
         layerShift = LayerShiftState(
             frameIndex = currentFrame,
-            layerId = target.id
+            layerId = target.id,
+            pivotX = pivot[0],
+            pivotY = pivot[1]
         )
     }
 
-    fun updateLayerShift(dx: Float, dy: Float) {
+    /** Absolute translation and rotation for the live shift, relative to the paper. */
+    fun updateLayerShift(dx: Float, dy: Float, rotation: Float? = null) {
         val current = layerShift ?: return
-        layerShift = current.copy(dx = current.dx + dx, dy = current.dy + dy)
+        layerShift = current.copy(
+            dx = dx,
+            dy = dy,
+            rotation = rotation ?: current.rotation
+        )
+    }
+
+    /**
+     * Centre of the ink and reference placement of one layer. Rotating around the
+     * content itself keeps a drawing turning on the spot instead of sliding around
+     * the middle of the paper.
+     */
+    private fun layerPivot(layer: Layer): FloatArray {
+        var left = Float.MAX_VALUE
+        var top = Float.MAX_VALUE
+        var right = -Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
+        for (stroke in layer.strokes) {
+            for (i in 0 until stroke.pointCount) {
+                val x = stroke.pointX(i)
+                val y = stroke.pointY(i)
+                if (x < left) left = x
+                if (x > right) right = x
+                if (y < top) top = y
+                if (y > bottom) bottom = y
+            }
+        }
+        layer.image?.let { image ->
+            val radians = Math.toRadians(image.rotation.toDouble())
+            val c = abs(cos(radians)).toFloat()
+            val s = abs(sin(radians)).toFloat()
+            val halfWidth = image.width * 0.5f
+            val halfHeight = image.height * 0.5f
+            val extentX = c * halfWidth + s * halfHeight
+            val extentY = s * halfWidth + c * halfHeight
+            if (image.centerX - extentX < left) left = image.centerX - extentX
+            if (image.centerX + extentX > right) right = image.centerX + extentX
+            if (image.centerY - extentY < top) top = image.centerY - extentY
+            if (image.centerY + extentY > bottom) bottom = image.centerY + extentY
+        }
+        if (left == Float.MAX_VALUE) {
+            return floatArrayOf(project.width * 0.5f, project.height * 0.5f)
+        }
+        return floatArrayOf((left + right) * 0.5f, (top + bottom) * 0.5f)
     }
 
     fun commitLayerShift() {
         val current = layerShift ?: return
         layerShift = null
-        if (abs(current.dx) < 0.01f && abs(current.dy) < 0.01f) return
+        if (abs(current.dx) < 0.01f && abs(current.dy) < 0.01f &&
+            abs(current.rotation) < 0.01f
+        ) {
+            return
+        }
         val frame = project.frameAt(current.frameIndex)
         val index = frame.layers.indexOfFirst { it.id == current.layerId }
         if (index < 0) return
         val target = frame.layers[index]
         if (target.strokes.isEmpty() && target.image == null) return
-        val updated = ProjectOps.translateLayer(
-            project, current.frameIndex, index, current.dx, current.dy
+        val updated = ProjectOps.transformLayer(
+            project,
+            current.frameIndex,
+            index,
+            current.dx,
+            current.dy,
+            current.rotation,
+            current.pivotX,
+            current.pivotY
         )
         if (updated === project) return
-        // The cached bitmap still shows the old position.
+        // The cached bitmap still shows the old position / rotation.
         renderer.invalidateLayer(current.layerId)
         renderer.invalidateComposites()
         apply(updated, current.frameIndex, index)
@@ -602,6 +722,60 @@ class EditorModel(
 
     fun cancelLayerShift() {
         if (layerShift != null) layerShift = null
+    }
+
+    // ------------------------------------------------------------- morph tool
+
+    /**
+     * Begins one morph drag on the selected layer. Like a stroke, the edit is
+     * committed when the gesture ends and shows up as one undoable step.
+     */
+    fun beginMorph(): Boolean {
+        if (morph != null) return true
+        if (placement != null || importingReference || videoImport != null) return false
+        if (layerShift != null) cancelLayerShift()
+        if (eyedropper != null) cancelEyedropper()
+        cancelActiveInk()
+        if (isPlaying) stopPlayback()
+        val target = layer
+        if (target.isReference) {
+            showHint("Reference layers are guides, not ink")
+            return false
+        }
+        if (target.locked) {
+            showHint("Unlock the layer to morph it")
+            return false
+        }
+        if (!target.visible) {
+            showHint("Make the layer visible to morph it")
+            return false
+        }
+        if (target.strokes.isEmpty()) {
+            showHint("Draw something to morph first")
+            return false
+        }
+        morph = MorphState(currentFrame, target.id, size)
+        return true
+    }
+
+    fun cancelMorph() {
+        if (morph != null) morph = null
+    }
+
+    /** Commits the sculpted vector points as a single undoable edit. */
+    fun commitMorph(strokes: List<Stroke>) {
+        val state = morph ?: return
+        morph = null
+        val frame = project.frameAt(state.frameIndex)
+        val index = frame.layers.indexOfFirst { it.id == state.layerId }
+        if (index < 0) return
+        val updated = ProjectOps.updateLayer(project, state.frameIndex, index) {
+            it.copy(strokes = strokes)
+        }
+        renderer.invalidateLayer(state.layerId)
+        renderer.invalidateComposites()
+        apply(updated, state.frameIndex, index)
+        showHint("Morphed the layer")
     }
 
     fun setLayerLocked(index: Int, locked: Boolean) {
@@ -622,6 +796,7 @@ class EditorModel(
 
     fun chooseTool(newTool: Tool) {
         if (newTool == tool) return
+        cancelMorph()
         prefs.setSizeFor(tool, size)
         if (tool == Tool.MARKER) prefs.setOpacityFor(tool, markerOpacity)
         tool = newTool
@@ -635,15 +810,26 @@ class EditorModel(
         prefs.lastColor = value
     }
 
-    /** Eyedropper: live sampler for the currently selected layer only. */
+    /** Stores one of the six user swatches; null clears it back to a blank slot. */
+    fun setCustomSwatch(index: Int, value: Int?) {
+        if (index !in 0 until Prefs.CUSTOM_SWATCH_COUNT) return
+        prefs.setCustomSwatch(index, value)
+        customSwatches = prefs.customSwatches()
+    }
+
+    /** Eyedropper: live sampler for one chosen layer, independent of the active layer. */
     private var eyedropperFound = false
 
-    fun beginEyedropper(): Boolean {
+    fun beginEyedropper(layerId: Long? = null): Boolean {
         if (eyedropper != null) return true
+        if (morph != null) return false
         if (placement != null || importingReference || videoImport != null) return false
         if (isPlaying) stopPlayback()
         cancelActiveInk()
-        val target = layer
+        val frame = project.frameAt(currentFrame)
+        val target = layerId
+            ?.let { id -> frame.layers.firstOrNull { it.id == id } }
+            ?: layer
         hint = null
         eyedropper = EyedropperState(
             frameIndex = currentFrame,
@@ -661,9 +847,13 @@ class EditorModel(
         val target = frame.layers.firstOrNull { it.id == state.layerId } ?: return false
         val bitmap = renderer.editableLayerBitmap(project, target)
         if (bitmap.width <= 0 || bitmap.height <= 0) return false
-        val cx = x.roundToInt().coerceIn(0, bitmap.width - 1)
-        val cy = y.roundToInt().coerceIn(0, bitmap.height - 1)
-        val r = radius.roundToInt().coerceIn(0, 64)
+        // Interactive layer caches may be smaller than the project (display scale),
+        // so project coordinates have to be mapped into bitmap pixels.
+        val cacheScaleX = bitmap.width.toFloat() / project.width
+        val cacheScaleY = bitmap.height.toFloat() / project.height
+        val cx = (x * cacheScaleX).roundToInt().coerceIn(0, bitmap.width - 1)
+        val cy = (y * cacheScaleY).roundToInt().coerceIn(0, bitmap.height - 1)
+        val r = (radius * max(cacheScaleX, cacheScaleY)).roundToInt().coerceIn(0, 64)
         val left = (cx - r).coerceAtLeast(0)
         val top = (cy - r).coerceAtLeast(0)
         val right = (cx + r).coerceAtMost(bitmap.width - 1)
@@ -753,6 +943,7 @@ class EditorModel(
         if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
         cancelLayerShift()
+        cancelMorph()
         currentFrame = index.coerceIn(0, project.frames.lastIndex)
         currentLayer = currentLayer.coerceIn(0, frame.layers.lastIndex)
         if (isPlaying) stopPlayback()
@@ -760,11 +951,22 @@ class EditorModel(
 
     fun selectLayer(index: Int) {
         if (eyedropper != null) cancelEyedropper()
+        // A live eraser or ink stroke must finish against the layer it started
+        // on; switching layers mid-stroke would otherwise commit it to the old
+        // layer while the model has already moved to the new one.
+        cancelActiveInk()
         cancelLayerShift()
+        cancelMorph()
         currentLayer = index.coerceIn(0, frame.layers.lastIndex)
     }
 
+    /** New frames copy the current one: consecutive drawings usually differ only slightly. */
     fun addFrame() {
+        duplicateFrame()
+    }
+
+    /** Adds a blank frame after the current one, keeping layer names, order and opacity. */
+    fun emptyFrame() {
         cancelActiveInk()
         clearVideoRange()
         apply(ProjectOps.addFrameAfter(project, currentFrame), currentFrame + 1, currentLayer)
@@ -826,14 +1028,85 @@ class EditorModel(
     }
 
     fun mergeLayerDown() {
-        val lower = frame.layers.getOrNull(currentLayer - 1)
-        if (layer.locked || layer.isReference || lower == null || lower.locked || lower.isReference) {
-            showHint("Locked and reference layers cannot be merged")
+        val frameData = project.frameAt(currentFrame)
+        if (currentLayer <= 0 || currentLayer > frameData.layers.lastIndex) {
+            showHint("There is no layer below to merge into")
             return
         }
+        val lower = frameData.layers[currentLayer - 1]
+        val upper = frameData.layers[currentLayer]
         cancelActiveInk()
-        val (updated, index) = ProjectOps.mergeLayerDown(project, currentFrame, currentLayer)
+
+        // Only the hard cases (upper eraser, reference images) need pixels. The
+        // common vector merge stays editable and does not touch the filesystem.
+        val flattened = if (ProjectOps.mergeNeedsFlattening(lower, upper)) {
+            flattenForMerge(lower, upper) ?: return
+        } else {
+            null
+        }
+        val (updated, index) = ProjectOps.mergeLayerDown(
+            project, currentFrame, currentLayer, flattened
+        )
+        if (updated === project) {
+            showHint("These layers could not be merged")
+            return
+        }
+        // Both source layers may have cached bitmaps; the merged layer needs a
+        // fresh render (especially when it is now raster ink).
+        renderer.invalidateLayer(lower.id)
+        renderer.invalidateLayer(upper.id)
+        renderer.invalidateComposites()
         apply(updated, currentFrame, index)
+    }
+
+    /**
+     * Renders the two layers together exactly as the canvas shows them and stores
+     * the result as an ink image. Hidden source layers are rendered as visible so
+     * a hidden pair can still be merged and shown later without losing content.
+     */
+    private fun flattenForMerge(lower: Layer, upper: Layer): LayerImage? {
+        val source = project
+        val frame = Frame(
+            id = Ids.next(),
+            layers = listOf(
+                if (lower.visible) lower else lower.copy(visible = true),
+                if (upper.visible) upper else upper.copy(visible = true)
+            )
+        )
+        val bitmap = runCatching {
+            FrameRasterizer.rasterize(
+                project = source,
+                frame = frame,
+                targetWidth = source.width,
+                targetHeight = source.height,
+                background = null,
+                includeReferences = true
+            )
+        }.getOrNull()
+        if (bitmap == null) {
+            showHint("Could not merge these layers")
+            return null
+        }
+        val name = "merged-${Ids.next()}.png"
+        val saved = runCatching {
+            ReferenceFiles.savePng(source.id, name, bitmap)
+        }.getOrDefault(false)
+        bitmap.recycle()
+        if (!saved) {
+            showHint("Could not save the merged layer")
+            return null
+        }
+        return LayerImage(
+            file = name,
+            sourceWidth = source.width,
+            sourceHeight = source.height,
+            centerX = source.width / 2f,
+            centerY = source.height / 2f,
+            width = source.width.toFloat(),
+            height = source.height.toFloat(),
+            rotation = 0f,
+            inOutput = true
+        )
     }
 
     fun moveLayerUp() {
@@ -852,6 +1125,18 @@ class EditorModel(
 
     fun setLayerVisible(index: Int, visible: Boolean) {
         apply(ProjectOps.updateLayer(project, currentFrame, index) { it.copy(visible = visible) })
+    }
+
+    /**
+     * Renames a layer. Blank or unchanged names are ignored so an empty field can
+     * never erase the label the user already had.
+     */
+    fun renameLayer(index: Int, name: String) {
+        val frame = project.frameAt(currentFrame)
+        val layer = frame.layers.getOrNull(index) ?: return
+        val trimmed = name.trim().replace(Regex("\\s+"), " ").take(40)
+        if (trimmed.isEmpty() || trimmed == layer.name) return
+        apply(ProjectOps.updateLayer(project, currentFrame, index) { it.copy(name = trimmed) })
     }
 
     fun toggleActiveLayerVisible() {
@@ -886,6 +1171,16 @@ class EditorModel(
         apply(ProjectOps.clearLayer(project, currentFrame, currentLayer))
     }
 
+    /** Includes or excludes an existing reference layer from exports. */
+    fun setReferenceLayerInOutput(layerIndex: Int, enabled: Boolean) {
+        val frameIndex = currentFrame
+        val frame = project.frameAt(frameIndex)
+        val index = layerIndex.coerceIn(0, frame.layers.lastIndex)
+        if (frame.layers[index].image == null) return
+        cancelActiveInk()
+        apply(ProjectOps.setReferenceInOutput(project, frameIndex, index, enabled))
+    }
+
     // ---------------------------------------------------------------- settings
 
     fun updateSettings(name: String, width: Int, height: Int, fps: Int, background: Int) {
@@ -902,82 +1197,43 @@ class EditorModel(
     fun togglePlayback() {
         if (eyedropper != null) cancelEyedropper()
         cancelActiveInk()
-        if (isPlaying) {
-            stopPlayback()
-        } else if (project.frames.size > 1) {
-            previewFrame = 0
-            isPlaying = true
-        }
+        if (isPlaying) stopPlayback() else playbackController.start()
     }
 
     fun stopPlayback() {
-        isPlaying = false
-        previewFrame = currentFrame
+        playbackController.stop()
     }
 
     fun updatePreviewFrame(index: Int) {
-        previewFrame = index.coerceIn(0, project.frames.lastIndex)
+        playbackController.updatePreviewFrame(index)
     }
 
     // ---------------------------------------------------------------- save
 
-    fun scheduleSave() {
-        if (disposed) return
-        saveJob?.cancel()
-        saveJob = scope.launch {
-            delay(900)
-            persist()
-        }
-    }
+    fun scheduleSave() = saveController.scheduleSave()
 
-    fun saveNow() {
-        if (disposed) return
-        saveJob?.cancel()
-        saveJob = scope.launch { persist() }
-    }
+    fun saveNow() = saveController.saveNow()
 
-    private suspend fun persist() {
-        if (discarded) return
-        val snapshot = project
-        val thumbFrame = snapshot.frameAt(currentFrame.coerceIn(0, snapshot.frames.lastIndex))
-        withContext(Dispatchers.IO) {
-            saveMutex.withLock {
-                if (discarded) return@withLock
-                store.save(snapshot)
-                store.saveThumbnail(snapshot, thumbFrame)
-            }
-        }
-        if (!discarded) {
-            withContext(Dispatchers.Main) {
-                lastSavedAt = System.currentTimeMillis()
-            }
-        }
-    }
+    /** Retries a failed autosave without waiting for the next edit. */
+    fun retrySave() = saveController.retrySave()
 
     fun dispose() {
-        if (disposed) return
         videoImportJob?.cancel()
-        saveNow()
-        disposed = true
-        exportJob?.cancel()
+        playbackController.dispose()
+        saveController.dispose()
+        exportController.dispose()
     }
 
-    var discarded = false
-        private set
-
     fun discard() {
-        discarded = true
-        disposed = true
         videoImportJob?.cancel()
-        saveJob?.cancel()
-        exportJob?.cancel()
+        playbackController.dispose()
+        saveController.discard()
+        exportController.dispose()
     }
 
     suspend fun purge() {
         discard()
-        saveMutex.withLock {
-            withContext(Dispatchers.IO) { store.delete(project.id) }
-        }
+        saveController.deleteCurrentProject()
     }
 
     // ---------------------------------------------------------------- export
@@ -985,37 +1241,24 @@ class EditorModel(
     fun startExport(format: ExportFormat, targetWidth: Int) {
         if (exportState is ExportState.Running) return
         cancelActiveInk()
-        exportState = ExportState.Running(0f)
-        val snapshot = project
-        val frameIndex = currentFrame
-        exportJob = scope.launch {
-            try {
-                val file = Exporter.export(
-                    context = context,
-                    project = snapshot,
-                    currentFrame = frameIndex,
-                    format = format,
-                    targetWidth = targetWidth
-                ) { progress ->
-                    withContext(Dispatchers.Main) {
-                        exportState = ExportState.Running(progress)
-                    }
-                }
-                exportState = ExportState.Done(file, format.mime)
-            } catch (c: kotlinx.coroutines.CancellationException) {
-                exportState = ExportState.Idle
-            } catch (t: Throwable) {
-                exportState = ExportState.Failed(t.message ?: "Export failed")
-            }
-        }
+        // Playback prefetch holds up to 48 MiB of frames; release it before the
+        // exporter starts claiming batches from the same heap.
+        if (isPlaying) stopPlayback()
+        exportController.start(format, targetWidth)
     }
 
-    fun cancelExport() {
-        exportJob?.cancel()
-        exportState = ExportState.Idle
-    }
+    fun cancelExport() = exportController.cancel()
 
-    fun dismissExport() {
-        if (exportState !is ExportState.Running) exportState = ExportState.Idle
+    fun dismissExport() = exportController.dismiss()
+
+    // ---------------------------------------------------------------- archive
+
+    fun savedViewportState(): String? = prefs.viewportFor(project.id)
+
+    fun storeViewportState(encoded: String?) = prefs.setViewportFor(project.id, encoded)
+
+    /** Writes a portable zip with this project and every reference it uses. */
+    suspend fun createArchive(): File? = withContext(Dispatchers.IO) {
+        store.exportArchive(project)
     }
 }

@@ -98,7 +98,8 @@ fun HomePopulatedPreview() {
             onOpen = {},
             onCreate = { _, _, _, _, _ -> },
             onDuplicate = {},
-            onDelete = {}
+            onDelete = {},
+            onImportArchive = {}
         )
     }
 }
@@ -116,7 +117,8 @@ fun HomeEmptyPreview() {
             onOpen = {},
             onCreate = { _, _, _, _, _ -> },
             onDuplicate = {},
-            onDelete = {}
+            onDelete = {},
+            onImportArchive = {}
         )
     }
 }
@@ -265,7 +267,7 @@ fun ColorSheetPreview() {
                 visible = true,
                 editor = model,
                 onDismiss = {},
-                onPickFromLayer = {}
+                onPickFromLayer = { _ -> }
             )
         }
     }
@@ -479,7 +481,7 @@ fun DarkHomePreview() {
         )
     }
     PennyTheme(darkTheme = true) {
-        HomeScreen(store, metas, false, {}, { _, _, _, _, _ -> }, {}, {})
+        HomeScreen(store, metas, false, {}, { _, _, _, _, _ -> }, {}, {}, {})
     }
 }
 

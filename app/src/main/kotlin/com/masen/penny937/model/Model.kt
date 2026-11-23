@@ -4,13 +4,14 @@ import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
 
-/** The four ink tools. Intentionally few — each one is meant to feel different. */
+/** The ink tools plus morph. Each one is meant to feel different. */
 enum class Tool(val label: String) {
     PEN("Pen"),
     PENCIL("Pencil"),
     MARKER("Marker"),
     SHAPE("Shape"),
-    ERASER("Eraser");
+    ERASER("Eraser"),
+    MORPH("Morph");
 
     val isEraser: Boolean get() = this == ERASER
 
@@ -23,6 +24,7 @@ enum class Tool(val label: String) {
         MARKER -> 40f
         SHAPE -> 8f
         ERASER -> 40f
+        MORPH -> 72f
     }
 
     fun defaultOpacity(): Float = when (this) {
@@ -33,12 +35,14 @@ enum class Tool(val label: String) {
     fun minWidth(): Float = when (this) {
         MARKER, ERASER -> 4f
         SHAPE -> 1f
+        MORPH -> 16f
         else -> 0.6f
     }
 
     fun maxWidth(): Float = when (this) {
         MARKER, ERASER -> 260f
         SHAPE -> 160f
+        MORPH -> 320f
         else -> 120f
     }
 }
@@ -74,13 +78,31 @@ class Stroke(
     fun pointPressure(i: Int): Float = points[i * 3 + 2]
 
     /** Returns a copy whose points are moved by [dx], [dy] project pixels. */
-    fun translated(dx: Float, dy: Float): Stroke {
-        if (dx == 0f && dy == 0f) return this
+    fun translated(dx: Float, dy: Float): Stroke = transformed(dx, dy, 0f, 0f, 0f)
+
+    /**
+     * Returns a copy rotated by [degrees] around ([pivotX], [pivotY]) and then
+     * translated by [dx], [dy]. This is exactly what the canvas previews while a
+     * layer is being shifted, so committing a gesture lands where the ink looked.
+     */
+    fun transformed(
+        dx: Float,
+        dy: Float,
+        degrees: Float,
+        pivotX: Float,
+        pivotY: Float
+    ): Stroke {
+        if (dx == 0f && dy == 0f && degrees == 0f) return this
+        val radians = Math.toRadians(degrees.toDouble())
+        val cos = kotlin.math.cos(radians).toFloat()
+        val sin = kotlin.math.sin(radians).toFloat()
         val moved = points.copyOf()
         var i = 0
         while (i < moved.size) {
-            moved[i] += dx
-            moved[i + 1] += dy
+            val px = moved[i] - pivotX
+            val py = moved[i + 1] - pivotY
+            moved[i] = pivotX + px * cos - py * sin + dx
+            moved[i + 1] = pivotY + px * sin + py * cos + dy
             i += 3
         }
         return Stroke(tool, color, width, opacity, moved)
@@ -95,7 +117,12 @@ data class LayerImage(
     val centerY: Float,
     val width: Float,
     val height: Float,
-    val rotation: Float = 0f
+    val rotation: Float = 0f,
+    /**
+     * Whether this reference is part of the exported animation. Guides stay off
+     * (the default); references used as footage or a background are turned on.
+     */
+    val inOutput: Boolean = false
 )
 
 data class Layer(
@@ -105,9 +132,14 @@ data class Layer(
     val opacity: Float = 1f,
     val locked: Boolean = false,
     val image: LayerImage? = null,
-    val strokes: List<Stroke> = emptyList()
+    val strokes: List<Stroke> = emptyList(),
+    /**
+     * True when [image] is baked ink from a merge rather than a reference guide.
+     * Flattened layers stay drawable and are always part of the output.
+     */
+    val flattened: Boolean = false
 ) {
-    val isReference: Boolean get() = image != null
+    val isReference: Boolean get() = image != null && !flattened
 
     /**
      * Cheap identity for the rendered result of this layer. Cached because the
@@ -117,6 +149,7 @@ data class Layer(
     val revision: Int by lazy {
         var h = 31 * (if (visible) 7 else 3) + (opacity * 100).toInt()
         h = h * 31 + (if (locked) 1 else 0)
+        h = h * 31 + (if (flattened) 1 else 0)
         h = h * 31 + (image?.hashCode() ?: 0)
         for (s in strokes) h = h * 31 + s.pointCount + s.tool.ordinal
         h
@@ -128,7 +161,8 @@ data class Layer(
      * points changes this even when the stroke count stays the same.
      */
     val contentRevision: Int by lazy {
-        var h = image?.hashCode() ?: 0
+        var h = if (flattened) 1 else 0
+        h = h * 31 + (image?.hashCode() ?: 0)
         h = h * 31 + strokes.size
         for (s in strokes) {
             h = h * 31 + System.identityHashCode(s.points)
@@ -209,6 +243,22 @@ data class Project(
     fun frameCountLabel(): String = "${frames.size} frame${if (frames.size == 1) "" else "s"}"
 
     fun aspect(): Float = width.toFloat() / height.toFloat()
+
+    /** Every reference file this project depends on, for GC and archive export. */
+    fun referencedFiles(): Set<String> =
+        frames.flatMapTo(LinkedHashSet()) { frame ->
+            frame.layers.mapNotNull { it.image?.file }
+        }
+}
+
+/**
+ * Folds a layer's opacity into a stroke so a merged layer can stay fully opaque.
+ * Erasers are left alone: they must keep cutting at full strength.
+ */
+private fun Stroke.withLayerOpacity(layerOpacity: Float): Stroke {
+    if (layerOpacity >= 0.999f || tool.isEraser) return this
+    val scaled = (opacity * layerOpacity).coerceIn(0f, 1f)
+    return if (scaled == opacity) this else Stroke(tool, color, width, scaled, points)
 }
 
 object Ids {
@@ -413,7 +463,13 @@ object ProjectOps {
                 }
             } else {
                 updateLayer(project, frameIndex, layerIndex) {
-                    it.copy(strokes = emptyList(), visible = true, opacity = 1f)
+                    it.copy(
+                        strokes = emptyList(),
+                        visible = true,
+                        opacity = 1f,
+                        image = null,
+                        flattened = false
+                    )
                 }
             }
             return cleared to layerIndex
@@ -424,23 +480,83 @@ object ProjectOps {
         return updated to (layerIndex.coerceIn(0, layers.lastIndex))
     }
 
-    fun mergeLayerDown(project: Project, frameIndex: Int, layerIndex: Int): Pair<Project, Int> {
+    /**
+     * Every pair of adjacent layers can be merged now. The only question is
+     * whether the result can stay vector. If it cannot, the caller supplies a
+     * [flattened] image of the two layers and the merged layer becomes raster ink.
+     */
+    fun canMergeLayerDown(frame: Frame, layerIndex: Int): Boolean =
+        layerIndex in 1..frame.layers.lastIndex
+
+    /**
+     * True when stacking [upper] on [lower] cannot be represented by simply
+     * concatenating strokes. Upper erasers would start cutting the lower layer,
+     * and reference images cannot be expressed as a single under-stroke image.
+     * Visibility mismatches do not need rasterising; they are resolved first.
+     */
+    fun mergeNeedsFlattening(lower: Layer, upper: Layer): Boolean =
+        lower.visible == upper.visible &&
+            (lower.image != null || upper.image != null ||
+                upper.strokes.any { it.tool.isEraser })
+
+    /**
+     * Flattens the layer above [layerIndex] into the layer below it without
+     * changing what the frame looks like.
+     *
+     * When the two layers can be expressed as one stroke list (no reference
+     * images involved and no upper eraser) their opacities are baked into the
+     * strokes and the vectors survive. Otherwise [flattened] carries the two
+     * layers rendered together, so the result is pixel-identical and can still be
+     * moved, locked, hidden or drawn on like any other layer.
+     *
+     * Visibility is interpreted by appearance:
+     *  - hidden upper: it contributes nothing, so it is simply dropped;
+     *  - hidden lower, visible upper: only the upper layer was visible, so its
+     *    content takes the slot;
+     *  - same visibility: both are combined, and the result keeps that visibility.
+     */
+    fun mergeLayerDown(
+        project: Project,
+        frameIndex: Int,
+        layerIndex: Int,
+        flattened: LayerImage? = null
+    ): Pair<Project, Int> {
         val frame = project.frameAt(frameIndex)
-        if (layerIndex <= 0) return project to layerIndex
+        if (layerIndex !in 1..frame.layers.lastIndex) return project to layerIndex
         val lower = frame.layers[layerIndex - 1]
         val upper = frame.layers[layerIndex]
-        if (lower.locked || upper.locked || lower.image != null || upper.image != null) {
-            return project to layerIndex
-        }
-        val merged = lower.copy(
-            strokes = lower.strokes + upper.strokes.map { s ->
-                if (s.opacity >= 1f) s
-                else Stroke(s.tool, s.color, s.width, s.opacity, s.points)
-            },
-            visible = true,
-            opacity = 1f
-        )
         val layers = frame.layers.toMutableList()
+        val merged: Layer
+
+        if (lower.visible && !upper.visible) {
+            // The upper layer contributed nothing on screen; merging is a delete.
+            layers.removeAt(layerIndex)
+            return updateFrame(project, frameIndex) { it.copy(layers = layers) } to (layerIndex - 1)
+        }
+
+        if (!lower.visible && upper.visible) {
+            // Only the upper layer was visible, so it becomes the whole result.
+            merged = upper.copy(id = lower.id, name = lower.name, locked = lower.locked)
+        } else if (mergeNeedsFlattening(lower, upper)) {
+            if (flattened == null) return project to layerIndex
+            merged = Layer(
+                id = lower.id,
+                name = lower.name,
+                visible = lower.visible,
+                opacity = 1f,
+                locked = lower.locked,
+                image = flattened,
+                flattened = true
+            )
+        } else {
+            merged = lower.copy(
+                strokes = lower.strokes.map { it.withLayerOpacity(lower.opacity) } +
+                    upper.strokes.map { it.withLayerOpacity(upper.opacity) },
+                visible = lower.visible,
+                opacity = 1f
+            )
+        }
+
         layers[layerIndex - 1] = merged
         layers.removeAt(layerIndex)
         val updated = updateFrame(project, frameIndex) { it.copy(layers = layers) }
@@ -460,7 +576,8 @@ object ProjectOps {
 
     fun clearLayer(project: Project, frameIndex: Int, layerIndex: Int): Project =
         updateLayer(project, frameIndex, layerIndex) {
-            if (it.locked || it.isReference) it else it.copy(strokes = emptyList())
+            if (it.locked || it.isReference) it
+            else it.copy(strokes = emptyList(), image = null, flattened = false)
         }
 
     /** Moves every stroke and the reference placement of one layer by [dx], [dy]. */
@@ -470,16 +587,51 @@ object ProjectOps {
         layerIndex: Int,
         dx: Float,
         dy: Float
+    ): Project = transformLayer(project, frameIndex, layerIndex, dx, dy, 0f, 0f, 0f)
+
+    /**
+     * Rotates a layer's strokes and reference around ([pivotX], [pivotY]), then
+     * moves them by [dx], [dy]. One undoable edit, like [translateLayer].
+     */
+    fun transformLayer(
+        project: Project,
+        frameIndex: Int,
+        layerIndex: Int,
+        dx: Float,
+        dy: Float,
+        degrees: Float,
+        pivotX: Float,
+        pivotY: Float
     ): Project =
         updateLayer(project, frameIndex, layerIndex) { layer ->
-            if (dx == 0f && dy == 0f) layer
-            else layer.copy(
-                image = layer.image?.let {
-                    it.copy(centerX = it.centerX + dx, centerY = it.centerY + dy)
-                },
-                strokes = layer.strokes.map { it.translated(dx, dy) }
-            )
+            if (dx == 0f && dy == 0f && degrees == 0f) layer
+            else {
+                val radians = Math.toRadians(degrees.toDouble())
+                val cos = kotlin.math.cos(radians).toFloat()
+                val sin = kotlin.math.sin(radians).toFloat()
+                layer.copy(
+                    image = layer.image?.let { image ->
+                        val px = image.centerX - pivotX
+                        val py = image.centerY - pivotY
+                        image.copy(
+                            centerX = pivotX + px * cos - py * sin + dx,
+                            centerY = pivotY + px * sin + py * cos + dy,
+                            rotation = normalizeAngle(image.rotation + degrees)
+                        )
+                    },
+                    strokes = layer.strokes.map {
+                        it.transformed(dx, dy, degrees, pivotX, pivotY)
+                    }
+                )
+            }
         }
+
+    private fun normalizeAngle(angle: Float): Float {
+        var a = angle % 360f
+        if (a > 180f) a -= 360f
+        if (a <= -180f) a += 360f
+        return a
+    }
 
     data class VideoInsertResult(
         val project: Project,
@@ -546,6 +698,17 @@ object ProjectOps {
         layerIndex: Int,
         image: LayerImage
     ): Project = updateLayer(project, frameIndex, layerIndex) { it.copy(image = image) }
+
+    /** Turns an existing reference on or off in the exported animation. */
+    fun setReferenceInOutput(
+        project: Project,
+        frameIndex: Int,
+        layerIndex: Int,
+        inOutput: Boolean
+    ): Project = updateLayer(project, frameIndex, layerIndex) { layer ->
+        val image = layer.image ?: return@updateLayer layer
+        if (image.inOutput == inOutput) layer else layer.copy(image = image.copy(inOutput = inOutput))
+    }
 
     fun updateSettings(
         project: Project,

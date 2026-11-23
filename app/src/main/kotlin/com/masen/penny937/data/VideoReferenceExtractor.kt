@@ -35,8 +35,29 @@ object VideoReferenceExtractor {
     private const val MAX_DIMENSION = 1920
     private const val JPEG_QUALITY = 86
 
+    /**
+     * Number of timeline frames a clip will occupy at [targetFps]. Kept separate
+     * from the Android decoder so the cap is testable on the JVM.
+     */
+    fun frameCount(durationMs: Long, targetFps: Int): Int =
+        ceil(durationMs.toDouble() * targetFps / 1000.0).toInt().coerceAtLeast(1)
+
+    /**
+     * Throws [VideoImportException] when [total] would exceed the per-import cap.
+     * Lowering the project frame rate or trimming the clip is the way out.
+     */
+    fun ensureWithinCap(total: Int, targetFps: Int) {
+        if (total > MAX_FRAMES) {
+            throw VideoImportException(
+                "That clip is too long at $targetFps fps ($total frames, max $MAX_FRAMES). " +
+                    "Lower the project frame rate or trim the clip."
+            )
+        }
+    }
+
     suspend fun extract(
         context: Context,
+        projectId: Long,
         uri: Uri,
         targetFps: Int,
         onTotal: suspend (Int) -> Unit,
@@ -51,14 +72,8 @@ object VideoReferenceExtractor {
             )?.toLongOrNull() ?: throw VideoImportException("Could not read the video length")
             if (durationMs <= 0L) throw VideoImportException("That video has no duration")
 
-            val total = ceil(durationMs.toDouble() * targetFps / 1000.0)
-                .toInt().coerceAtLeast(1)
-            if (total > MAX_FRAMES) {
-                throw VideoImportException(
-                    "That clip is too long at $targetFps fps ($total frames, max $MAX_FRAMES). " +
-                        "Lower the project frame rate or trim the clip."
-                )
-            }
+            val total = frameCount(durationMs, targetFps)
+            ensureWithinCap(total, targetFps)
             onTotal(total)
 
             val naturalWidth = retriever.extractMetadata(
@@ -89,12 +104,12 @@ object VideoReferenceExtractor {
                 bitmap = orient(bitmap, rotation, storedLandscape)
                 bitmap = downscale(bitmap, MAX_DIMENSION)
                 val name = "video-$stamp-$i.jpg"
-                val ok = ReferenceFiles.saveJpeg(name, bitmap, JPEG_QUALITY)
+                val ok = ReferenceFiles.saveJpeg(projectId, name, bitmap, JPEG_QUALITY)
                 val width = bitmap.width
                 val height = bitmap.height
                 bitmap.recycle()
                 if (!ok) {
-                    ReferenceFiles.delete(name)
+                    ReferenceFiles.delete(projectId, name)
                     throw VideoImportException("Could not save the video frame")
                 }
                 files.add(name)
@@ -104,7 +119,7 @@ object VideoReferenceExtractor {
             if (result.isEmpty()) throw VideoImportException("No frames could be read")
             ExtractedVideo(result, durationMs)
         } catch (t: Throwable) {
-            files.forEach { ReferenceFiles.delete(it) }
+            files.forEach { ReferenceFiles.delete(projectId, it) }
             throw t
         } finally {
             retriever.release()

@@ -8,61 +8,42 @@ Paste-ready text. Limits: name 30, short description 80, full description 4000.
 PeNNy-937
 ```
 
-## Short description (69 / 80)
+## Short description (66 / 80)
 
 ```
-Frame-by-frame animation with vector inks, layers and onion skin.
+Draw animation frame by frame with a stylus. Vectors, layers, MP4.
 ```
 
-## Full description (2 118 / 4 000)
+## Full description (1406 / 4 000)
 
 ```
-PeNNy-937 is a frame-by-frame animation studio for Android, built for a stylus.
+PeNNy-937 is a drawing app for people who animate by hand.
 
-Draw on paper you control, flip through frames, and export a movie. Every stroke
-is kept as a vector, so nothing you draw is welded to the size you drew it at:
-change the canvas resolution afterwards, or export larger than your screen, and
-the ink is re-rendered from the vectors at full quality.
+You draw a frame, flip to the next, draw it again, and the sequence starts to
+move. Onion skin keeps the previous drawing faintly behind the one you are
+making, so the next pose is a small correction instead of a guess.
 
-INK
-Pen with pressure taper, pencil with procedural graphite grain, and a marker that
-lays down one even translucent pass so overlapping strokes never double up at the
-joints. The eraser only touches the layer you are on. Hold the pen's side button
-to erase for a single stroke without changing tools. Pressure, hover position and
-the stylus button come from the raw stylus events, and palm-sized contacts are
-ignored so your hand can rest on the screen.
+Everything you draw is a vector, not pixels. Work at whatever zoom is
+comfortable, change the canvas size later, or export bigger than your screen:
+the ink is re-rendered from the strokes at whatever size you ask for, so it
+never goes soft.
 
-FRAMES AND LAYERS
-Add, duplicate, hold, reorder and delete frames. Every frame carries its own stack
-of layers: rename, duplicate, hide, reorder, set opacity, lock, clear, or merge
-down. Merge down works for every kind of layer, including reference images and
-eraser marks. Onion skin shows one neighbouring drawing at a time: a blue ghost
-of the previous frame behind your ink, or a red ghost of the next one.
+Work is organised the way hand-drawn animation is: frames along a timeline, each
+with its own stack of layers. Duplicate a pose to start the next one, hide a
+layer to see what is underneath, or bring a photo in as a locked guide you
+cannot accidentally draw on. Import a video and it becomes one reference frame
+per timeline step, which is the quick way to rotoscope footage you already shot.
 
-TOOLS
-Line, rectangle, square, ellipse and circle are drag-to-place vector shapes. Morph
-bends the ink under a soft brush, so a drawing can be reshaped directly instead of
-erased and redrawn. Move and rotate drags a whole layer across the canvas, and two
-fingers twist it around its own centre. The eyedropper samples the layer you pick,
-not the flattened composite, so the colour you get is the ink you tapped.
+When it moves the way you want it, export it: MP4, GIF, a PNG sequence, or the
+current drawing as a still.
 
-REFERENCES
-Import a photo and place it as a locked guide. Import a video and get one
-reference layer per timeline frame, sampled at your project frame rate: a fast way
-to rotoscope, or to draw over footage you already have. References stay guides by
-default (never drawn on, never exported), or can be included in the export as
-footage underneath your drawing.
+The app asks for no permissions at all, does not even hold the internet
+permission, and has no account, no ads and no tracking. Your work lives in the
+app's own folder and goes nowhere else.
 
-EXPORT
-MP4 (H.264), animated GIF, a PNG sequence, or the current frame as a single PNG.
-Exports render from the vectors at the size you choose, not at the size of your
-screen. Projects autosave as compact vector documents with a poster thumbnail, and
-can be exported and imported as a zip that carries every reference with it.
-
-NO ACCOUNT, NO NETWORK
-The app requests no permissions and holds no internet permission at all, so it
-cannot send anything anywhere. There is no telemetry, no advertising and no sign
-in. Your work stays in the app's own folder on your device.
+It is made for a stylus: pressure, tilt and the pen's side button are read
+directly, and a palm resting on the screen is ignored. It works with a finger
+too.
 
 Requires Android 8.0 or newer.
 ```

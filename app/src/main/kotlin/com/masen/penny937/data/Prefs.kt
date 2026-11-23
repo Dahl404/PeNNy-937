@@ -51,6 +51,19 @@ class Prefs(context: Context) {
         get() = sp?.getBoolean("grid", false) ?: false
         set(value) = write { putBoolean("grid", value) }
 
+    /** Opacity of the floating tool and frame windows, so the art can show through. */
+    var panelOpacity: Float
+        get() = sp?.getFloat("panelOpacity", 0.9f) ?: 0.9f
+        set(value) = write { putFloat("panelOpacity", value) }
+
+    var panelsHidden: Boolean
+        get() = sp?.getBoolean("panelsHidden", false) ?: false
+        set(value) = write { putBoolean("panelsHidden", value) }
+
+    var panelsFadeWhileDrawing: Boolean
+        get() = sp?.getBoolean("panelsFadeWhileDrawing", true) ?: true
+        set(value) = write { putBoolean("panelsFadeWhileDrawing", value) }
+
     var gridStyle: GridStyle
         get() = runCatching {
             GridStyle.valueOf(sp?.getString("gridStyle", GridStyle.GRID.name) ?: GridStyle.GRID.name)

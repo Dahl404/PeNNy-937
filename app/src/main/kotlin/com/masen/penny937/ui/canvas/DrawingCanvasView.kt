@@ -244,6 +244,16 @@ class DrawingCanvasView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** The canvas installs this so the panels can fade out of the way of the pen. */
+    var onInkActiveChange: ((Boolean) -> Unit)? = null
+    private var inkActive = false
+
+    private fun publishInkActive(active: Boolean) {
+        if (inkActive == active) return
+        inkActive = active
+        onInkActiveChange?.invoke(active)
+    }
+
     fun cancelActiveStroke() {
         if (inker != null) cancelStroke()
         mode = Mode.NONE
@@ -892,6 +902,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         }
         model.ensureLayerVisibleForInk()
         mode = Mode.DRAW
+        publishInkActive(true)
         addSample(event, index)
     }
 
@@ -910,6 +921,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         shapeCurrentY = shapeStartY
         shapePreview = null
         mode = Mode.SHAPE
+        publishInkActive(true)
         invalidate()
     }
 
@@ -1065,6 +1077,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         shapeStartY = 0f
         shapeCurrentX = 0f
         shapeCurrentY = 0f
+        publishInkActive(false)
     }
 
     private fun drawPlacement(canvas: Canvas, placement: ReferencePlacement) {
@@ -1818,6 +1831,7 @@ class DrawingCanvasView @JvmOverloads constructor(
         activeLayerIndex = -1
         activeLayerId = -1L
         strokeFrameIndex = -1
+        publishInkActive(false)
     }
 
     // ------------------------------------------------------------------ misc

@@ -1870,6 +1870,42 @@ fun BoxScope.ProjectMenuSheet(
                     )
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            Hairline()
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("Windows")
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Opacity", style = type.label, color = palette.textSecondary)
+                Spacer(Modifier.width(10.dp))
+                PennySlider(
+                    value = editor.panelOpacity,
+                    onValueChange = { editor.changePanelOpacity(it) },
+                    valueRange = EditorModel.MIN_PANEL_OPACITY..1f,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "${(editor.panelOpacity * 100).roundToInt()}%",
+                    style = type.caption,
+                    color = palette.textPrimary,
+                    modifier = Modifier.width(34.dp)
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            ToggleRow(
+                title = "Hide while drawing",
+                subtitle = "Windows step aside until the pen lifts",
+                checked = editor.panelsFadeWhileDrawing,
+                onCheckedChange = { editor.togglePanelsFadeWhileDrawing() }
+            )
+            Spacer(Modifier.height(12.dp))
+            ToggleRow(
+                title = "Hide windows",
+                subtitle = "Slide the tools and frames off the canvas",
+                checked = editor.panelsHidden,
+                onCheckedChange = { editor.togglePanelsHidden() }
+            )
             if (onShareProject != null) {
                 Spacer(Modifier.height(8.dp))
                 SecondaryButton(

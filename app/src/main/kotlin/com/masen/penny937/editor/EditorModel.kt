@@ -120,6 +120,13 @@ class EditorModel(
         private set
     var gridStyle by mutableStateOf(prefs.gridStyle)
         private set
+    /** Opacity of the floating windows over the canvas. */
+    var panelOpacity by mutableStateOf(prefs.panelOpacity.coerceIn(MIN_PANEL_OPACITY, 1f))
+        private set
+    var panelsHidden by mutableStateOf(prefs.panelsHidden)
+        private set
+    var panelsFadeWhileDrawing by mutableStateOf(prefs.panelsFadeWhileDrawing)
+        private set
     var shapeKind by mutableStateOf(prefs.shapeKind)
         private set
     var placement by mutableStateOf<ReferencePlacement?>(null)
@@ -927,6 +934,21 @@ class EditorModel(
         prefs.gridEnabled = gridEnabled
     }
 
+    fun changePanelOpacity(value: Float) {
+        panelOpacity = value.coerceIn(MIN_PANEL_OPACITY, 1f)
+        prefs.panelOpacity = panelOpacity
+    }
+
+    fun togglePanelsHidden() {
+        panelsHidden = !panelsHidden
+        prefs.panelsHidden = panelsHidden
+    }
+
+    fun togglePanelsFadeWhileDrawing() {
+        panelsFadeWhileDrawing = !panelsFadeWhileDrawing
+        prefs.panelsFadeWhileDrawing = panelsFadeWhileDrawing
+    }
+
     fun chooseGridStyle(style: GridStyle) {
         gridStyle = style
         prefs.gridStyle = style
@@ -1260,5 +1282,10 @@ class EditorModel(
     /** Writes a portable zip with this project and every reference it uses. */
     suspend fun createArchive(): File? = withContext(Dispatchers.IO) {
         store.exportArchive(project)
+    }
+
+    companion object {
+        /** Translucent enough to read the art through, solid enough to stay legible. */
+        const val MIN_PANEL_OPACITY = 0.28f
     }
 }

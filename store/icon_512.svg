@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108"><path fill="#F7F1E3" d="M0,0h108v108h-108z"/>
-<path fill="#EDE5D2" d="M0,84c26,-10 44,4 62,0s30,-10 46,-6v30h-108z"/><g transform="rotate(-13 54 56)">
-<path fill="#14000000" d="M47,44h24v34l-9,17a3.2,3.2 0 0,1 -6,0l-9,-17z"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108"><rect width="108" height="108" fill="#F7F1E3"/>
+<path fill="#EDE5D2" d="M0,84c26,-10 44,4 62,0s30,-10 46,-6v30h-108z"/><g transform="translate(54,56) scale(1.14) translate(-54,-56)"><g transform="rotate(-13 54 56)"><path fill="#000000" fill-opacity="0.08" d="M47,44h24v34l-9,17a3.2,3.2 0 0,1 -6,0l-9,-17z"/>
 <path fill="#1D1D1F" d="M40,34a12,12 0 0,1 12,-12h4a12,12 0 0,1 12,12v42h-28z"/>
 <path fill="#1D1D1F" d="M40,74h28l-11,19a3.4,3.4 0 0,1 -6,0z"/>
 <path fill="#F7F1E3" d="M51,88h6l-3,5.4z"/>
@@ -9,5 +8,4 @@
 <circle cx="48" cy="43" r="1.9" fill="#1D1D1F"/>
 <circle cx="60" cy="43" r="1.9" fill="#1D1D1F"/>
 <path d="M50,49q4,4.4 8,0" stroke="#1D1D1F" stroke-linecap="round" stroke-width="2" fill="none"/>
-<path fill="#33FFFFFF" d="M44,34h3v26h-3z"/>
-</g></svg>
+<rect x="44" y="34" width="3" height="26" fill="#FFFFFF" fill-opacity="0.22"/></g></g></svg>

@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -119,6 +120,7 @@ fun EditorScreen(
     var sheet by remember { mutableStateOf(EditorSheet.NONE) }
     var confirmDelete by remember { mutableStateOf(false) }
     var canvasView by remember { mutableStateOf<DrawingCanvasView?>(null) }
+    var inkActive by remember { mutableStateOf(false) }
     var hintVisible by remember { mutableStateOf(editor.showGestureHint) }
     val placing by remember { derivedStateOf { editor.placement != null } }
     val shifting by remember { derivedStateOf { editor.layerShift != null } }
@@ -226,7 +228,8 @@ fun EditorScreen(
                     editor = editor,
                     darkTheme = palette.isDark,
                     modifier = Modifier.fillMaxSize(),
-                    onViewCreated = { canvasView = it }
+                    onViewCreated = { canvasView = it },
+                    onInkActive = { inkActive = it }
                 )
 
                 if (picking) {
@@ -236,20 +239,41 @@ fun EditorScreen(
                 } else if (shifting) {
                     // The canvas moves the selected layer directly while dragging.
                 } else if (!editor.isPlaying) {
-                    LeftWindows(
-                        editor = editor,
+                    // The windows are translucent and step out of the way while a
+                    // stroke is in progress, so the art is never hidden under them.
+                    val panelsFade by animateFloatAsState(
+                        targetValue = if (inkActive && editor.panelsFadeWhileDrawing) 0.12f else 1f,
+                        animationSpec = PennyMotion.contentFloat(),
+                        label = "panelsFade"
+                    )
+                    val panelsSlide by animateFloatAsState(
+                        targetValue = if (editor.panelsHidden) 1f else 0f,
+                        animationSpec = PennyMotion.contentFloat(),
+                        label = "panelsSlide"
+                    )
+                    var panelWidthPx by remember { mutableIntStateOf(0) }
+                    Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(start = 10.dp, top = 6.dp),
-                        onBrush = { sheet = EditorSheet.BRUSH },
-                        onColor = { sheet = EditorSheet.COLOR },
-                        onLayers = { sheet = EditorSheet.LAYERS },
-                        onFrameMenu = { sheet = EditorSheet.FRAME },
-                        onAddFrame = {
-                            PennyHaptics.tap(view)
-                            editor.addFrame()
-                        }
-                    )
+                            .padding(start = 10.dp, top = 6.dp)
+                            .onSizeChanged { panelWidthPx = it.width }
+                            .graphicsLayer {
+                                alpha = panelsFade
+                                translationX = -panelsSlide * (panelWidthPx + 26.dp.toPx())
+                            }
+                    ) {
+                        LeftWindows(
+                            editor = editor,
+                            onBrush = { sheet = EditorSheet.BRUSH },
+                            onColor = { sheet = EditorSheet.COLOR },
+                            onLayers = { sheet = EditorSheet.LAYERS },
+                            onFrameMenu = { sheet = EditorSheet.FRAME },
+                            onAddFrame = {
+                                PennyHaptics.tap(view)
+                                editor.addFrame()
+                            }
+                        )
+                    }
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -270,6 +294,19 @@ fun EditorScreen(
                             tint = palette.textSecondary,
                             background = palette.surface,
                             contentDescription = "Toggle grid"
+                        )
+                        PennyIconButton(
+                            icon = if (editor.panelsHidden) PennyIcons.EyeOff else PennyIcons.Eye,
+                            onClick = {
+                                PennyHaptics.tap(view)
+                                editor.togglePanelsHidden()
+                            },
+                            selected = editor.panelsHidden,
+                            size = 38.dp,
+                            iconSize = 18.dp,
+                            tint = palette.textSecondary,
+                            background = palette.surface,
+                            contentDescription = "Show or hide the floating windows"
                         )
                         PennyIconButton(
                             icon = PennyIcons.Fit,
@@ -856,7 +893,8 @@ private fun CanvasHost(
     editor: EditorModel,
     darkTheme: Boolean,
     modifier: Modifier = Modifier,
-    onViewCreated: (DrawingCanvasView) -> Unit
+    onViewCreated: (DrawingCanvasView) -> Unit,
+    onInkActive: (Boolean) -> Unit
 ) {
     // Subscribing to this value is what makes the canvas repaint continuously
     // during onion-slider drags and after frame / layer / grid / ink changes.
@@ -868,6 +906,7 @@ private fun CanvasHost(
         modifier = modifier,
         update = { view ->
             view.darkTheme = darkTheme
+            view.onInkActiveChange = onInkActive
             view.bind(editor, revision)
             view.previewFrameIndex = if (editor.isPlaying) editor.previewFrame else -1
         }
@@ -994,8 +1033,9 @@ private fun ToolWindow(
     onColor: () -> Unit
 ) {
     var collapsed by remember { mutableStateOf(false) }
+    val palette = LocalPenny.current
 
-    PennyCard(corner = 20.dp) {
+    PennyCard(corner = 20.dp, color = palette.surface.copy(alpha = editor.panelOpacity)) {
         AnimatedContent(
             targetState = collapsed,
             transitionSpec = {
@@ -1141,7 +1181,7 @@ private fun FrameWindow(
         }
         lastShownFrame = editor.currentFrame
     }
-    PennyCard(corner = 20.dp) {
+    PennyCard(corner = 20.dp, color = palette.surface.copy(alpha = editor.panelOpacity)) {
         AnimatedContent(
             targetState = collapsed,
             transitionSpec = {

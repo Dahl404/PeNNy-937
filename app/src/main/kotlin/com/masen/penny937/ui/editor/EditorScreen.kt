@@ -29,6 +29,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -239,11 +240,28 @@ fun EditorScreen(
                 } else if (shifting) {
                     // The canvas moves the selected layer directly while dragging.
                 } else if (!editor.isPlaying) {
-                    // The windows are translucent and step out of the way while a
-                    // stroke is in progress, so the art is never hidden under them.
+                    // The windows are translucent, and they fade out completely while a
+                    // stroke is in progress so nothing sits between the pen and the art.
+                    // Once invisible they also step off-screen, which is what stops them
+                    // swallowing touches, because alpha alone still hit-tests.
+                    var penAway by remember { mutableStateOf(false) }
+                    LaunchedEffect(inkActive) {
+                        if (inkActive) {
+                            penAway = true
+                        } else {
+                            // A short grace period keeps the windows from flickering
+                            // back in between the strokes of one drawing session.
+                            delay(190)
+                            penAway = false
+                        }
+                    }
+                    val away = penAway && editor.panelsFadeWhileDrawing
                     val panelsFade by animateFloatAsState(
-                        targetValue = if (inkActive && editor.panelsFadeWhileDrawing) 0.12f else 1f,
-                        animationSpec = PennyMotion.contentFloat(),
+                        targetValue = if (away) 0f else 1f,
+                        animationSpec = tween(
+                            durationMillis = if (away) PennyMotion.fadeOutMillis else PennyMotion.fadeInMillis,
+                            easing = if (away) PennyMotion.exit else PennyMotion.standard
+                        ),
                         label = "panelsFade"
                     )
                     val panelsSlide by animateFloatAsState(
@@ -259,7 +277,14 @@ fun EditorScreen(
                             .onSizeChanged { panelWidthPx = it.width }
                             .graphicsLayer {
                                 alpha = panelsFade
-                                translationX = -panelsSlide * (panelWidthPx + 26.dp.toPx())
+                                val off = panelWidthPx + 26.dp.toPx()
+                                translationX = when {
+                                    panelsSlide > 0f -> -panelsSlide * off
+                                    // Faded out: park it off-screen, invisibly, so it
+                                    // no longer intercepts the pen.
+                                    panelsFade < 0.02f -> -off
+                                    else -> 0f
+                                }
                             }
                     ) {
                         LeftWindows(

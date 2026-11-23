@@ -1894,8 +1894,8 @@ fun BoxScope.ProjectMenuSheet(
             }
             Spacer(Modifier.height(6.dp))
             ToggleRow(
-                title = "Hide while drawing",
-                subtitle = "Windows step aside until the pen lifts",
+                title = "Fade while drawing",
+                subtitle = "Windows fade out completely under the pen, then return",
                 checked = editor.panelsFadeWhileDrawing,
                 onCheckedChange = { editor.togglePanelsFadeWhileDrawing() }
             )

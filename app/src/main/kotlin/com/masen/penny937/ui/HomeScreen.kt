@@ -1,5 +1,6 @@
 package com.masen.penny937.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -45,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.imePadding
+import com.masen.penny937.BuildConfig
 import com.masen.penny937.data.ProjectMeta
 import com.masen.penny937.data.ProjectStore
 import com.masen.penny937.model.ProjectFactory
@@ -179,7 +182,7 @@ fun HomeScreen(
                     Hairline()
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        "PeNNy-937 — an offline sketchbook for people who draw frame by frame.",
+                        "Offline. No account, no ads, no network permission.",
                         style = type.caption,
                         color = palette.textTertiary,
                         lineHeight = 17.sp
@@ -239,7 +242,7 @@ private fun HomeHeader(onAbout: () -> Unit) {
             }
             Spacer(Modifier.height(3.dp))
             Text(
-                "Frame-by-frame, by hand.",
+                "Animation. Nothing else.",
                 style = type.label,
                 color = palette.textSecondary
             )
@@ -609,6 +612,7 @@ private fun BoxScope.ProjectActionSheet(
 private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
     val palette = LocalPenny.current
     val type = LocalPennyType.current
+    val context = LocalContext.current
     PennySheet(
         visible = visible,
         onDismiss = onDismiss,
@@ -644,9 +648,29 @@ private fun BoxScope.AboutSheet(visible: Boolean, onDismiss: () -> Unit) {
             Hairline()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Version 1.6 · Made for stylus and patience",
+                "Version ${BuildConfig.VERSION_NAME} · Made for stylus and patience",
                 style = type.caption,
                 color = palette.textTertiary
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Free, open source, GPL-3.0. No account, no ads, no network.",
+                style = type.caption,
+                color = palette.textTertiary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "github.com/Dahl404/PeNNy-937",
+                style = type.caption,
+                color = palette.accent,
+                modifier = Modifier.clickable {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Dahl404/PeNNy-937"))
+                        )
+                    }
+                }
             )
             Spacer(Modifier.height(4.dp))
             Text(

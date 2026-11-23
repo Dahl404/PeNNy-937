@@ -19,7 +19,7 @@ android {
     applicationId = "com.masen.penny937"
     minSdk = 26
     targetSdk = 37
-    versionCode = 11
+    versionCode = 12
     versionName = "1.7"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -49,7 +49,7 @@ android {
   buildFeatures {
     compose = true
     aidl = false
-    buildConfig = false
+    buildConfig = true
     shaders = false
   }
 

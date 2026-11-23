@@ -1,6 +1,6 @@
 # PeNNy-937
 
-A frame-by-frame animation app for Android. Requires Android 8.0 (API 26) or newer.
+Animation app for Android. Requires Android 8.0 (API 26) or newer.
 
 Free and open source under the GPL-3.0 (see `LICENSE`). No ads, no account, no
 purchases, no analytics, and no `INTERNET` permission — the app is technically

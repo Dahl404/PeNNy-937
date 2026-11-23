@@ -67,7 +67,7 @@ feature = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" 
 <g transform="translate(150,250) scale(2.55) translate(-54,-56)">{pen(1.0)}</g>
 <text x="392" y="190" font-family="{FONT}" font-size="96" font-weight="700" fill="#1D1D1F"
       letter-spacing="-2">PeNNy-937</text>
-<text x="396" y="240" font-family="{FONT}" font-size="28" font-weight="500" fill="#1D1D1F" fill-opacity="0.78">Frame-by-frame animation. Nothing else.</text>
+<text x="396" y="240" font-family="{FONT}" font-size="28" font-weight="500" fill="#1D1D1F" fill-opacity="0.78">One job. No bloat.</text>
 <text x="396" y="286" font-family="{FONT}" font-size="25" font-weight="600" fill="#0A84FF" letter-spacing="0.2">FREE · OPEN SOURCE · NO ADS · NO ACCOUNT</text>
 <text x="396" y="330" font-family="{FONT}" font-size="22" font-weight="400" fill="#1D1D1F" fill-opacity="0.55">Vector inks · layers · onion skin · MP4 and GIF</text>
 {frames(398, 356, 124, 18)}

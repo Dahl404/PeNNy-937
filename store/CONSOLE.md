@@ -154,7 +154,7 @@ is about as easy a review as exists.
 
 ## Facts worth keeping
 
-- Package: `com.masen.penny937` (permanent) · versionCode `10` · versionName `1.7`
+- Package: `com.masen.penny937` (permanent) · versionCode `11` · versionName `1.7`
 - minSdk 26, targetSdk 37 · no permissions · no network · no ads · no IAP
 - AAB: 8.7 MB · upload key: `~/keys/penny-937-upload.jks` (alias `upload`)
 - Each new upload needs a higher `versionCode` in `app/build.gradle.kts`.

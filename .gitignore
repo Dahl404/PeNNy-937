@@ -20,3 +20,4 @@ keystore.properties
 # stale nested copy of the project
 /ready to upload/
 *.zip
+*.zip
